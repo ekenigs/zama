@@ -1,0 +1,40 @@
+---
+description: Partition arrays with Object.groupBy instead of repeated filter
+globs: **/*.ts
+alwaysApply: false
+---
+
+# Prefer groupBy Over Multiple Filters
+
+When splitting the same array into buckets by a property, use **`Object.groupBy`** once instead of multiple **`.filter`** passes.
+
+## Rules
+
+- One pass over the data, not N filters for N buckets.
+- Use a callback that returns a stable string key (or symbol) per bucket.
+- Missing keys are `undefined` — default to `[]` when destructuring arrays.
+
+## Example
+
+```typescript
+// ❌ BAD — two full scans
+const customerFindings = findings.filter((finding) => !finding.awsManaged);
+const awsManagedFindings = findings.filter((finding) => finding.awsManaged);
+
+// ✅ GOOD — single pass
+const { managed = [], unmanaged = [] } = Object.groupBy(
+  findings,
+  (finding) => (finding.awsManaged ? "managed" : "unmanaged"),
+);
+```
+
+Keep the grouped object when callers need a map keyed by category:
+
+```typescript
+const checksByEvidence = Object.groupBy(checks, (check) => check.evidenceKey);
+```
+
+## When filter is still fine
+
+- A single exclusion or inclusion with no sibling buckets.
+- Filtering after grouping, or on a different source array than the partition.

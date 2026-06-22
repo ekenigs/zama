@@ -1,0 +1,6 @@
+minimumReleaseAge: 1440
+minimumReleaseAgeStrict: true
+saveExact: true
+allowBuilds:
+  esbuild: true
+  lefthook: true

@@ -1,0 +1,131 @@
+---
+description: Blank lines inside functions — returns, control flow, const/let blocks
+alwaysApply: true
+---
+
+# Function Spacing
+
+Use blank lines to separate logical steps inside a function. Do not pack unrelated statements together.
+
+## Returns
+
+Always put a blank line immediately before every `return` (including early returns).
+
+```typescript
+// ✅ GOOD
+if (!user) {
+  return null;
+}
+
+const profile = await loadProfile(user);
+
+return profile;
+
+// ❌ BAD
+if (!user) {
+  return null;
+}
+const profile = await loadProfile(user);
+return profile;
+```
+
+## Control flow
+
+Put a blank line **before and after** `if`, `else`, `for`, `while`, `do`, `switch`, and `try` / `catch` / `finally` blocks when they sit among other statements.
+
+```typescript
+// ✅ GOOD
+const rows = await fetchRows();
+
+for (const row of rows) {
+  await processRow(row);
+}
+
+switch (row.kind) {
+  case "a":
+    handleA(row);
+    break;
+  default:
+    handleDefault(row);
+}
+
+return { count: rows.length };
+
+// ❌ BAD — no breathing room around control flow
+const rows = await fetchRows();
+for (const row of rows) {
+  await processRow(row);
+}
+switch (row.kind) {
+  case "a": handleA(row); break;
+}
+return { count: rows.length };
+```
+
+Inside long `if` / loop bodies, separate distinct steps with blank lines the same way.
+
+## Variable groups
+
+Group declarations by kind. Keep **`const`** declarations together, then a blank line, then **`let`** declarations together. Do not interleave `const` and `let`.
+
+**Always** put a blank line after the last declaration in a `const` or `let` block before any following statement (calls, control flow, `return`, etc.).
+
+```typescript
+// ✅ GOOD
+const profile = await loadProfile(user);
+
+processProfile(profile);
+
+// ❌ BAD
+const profile = await loadProfile(user);
+processProfile(profile);
+```
+
+```typescript
+// ✅ GOOD
+const accountId = options.accountId;
+const client = createClient(config);
+
+let collected = 0;
+let failures: string[] = [];
+
+for (const item of items) {
+  /* ... */
+}
+
+// ❌ BAD
+const accountId = options.accountId;
+let collected = 0;
+const client = createClient(config);
+let failures: string[] = [];
+for (const item of items) {
+  /* ... */
+}
+```
+
+Multiple `const` or multiple `let` in the same group need no blank line between each other unless a subgroup is a distinct logical step.
+
+## Logical sections
+
+Separate setup, mutation/work, and teardown/result with blank lines when a function has more than one phase.
+
+```typescript
+// ✅ GOOD
+export async function runJob(options: JobOptions): Promise<JobResult> {
+  const config = resolveConfig(options);
+  const client = buildClient(config);
+
+  let processed = 0;
+
+  for (const item of options.items) {
+    await client.process(item);
+    processed += 1;
+  }
+
+  await client.close();
+
+  return { processed };
+}
+```
+
+When editing existing functions, apply these spacing rules to the changed region and match surrounding style where it already follows this rule.

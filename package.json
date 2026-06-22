@@ -1,0 +1,33 @@
+{
+  "name": "zama",
+  "version": "1.0.0",
+  "type": "module",
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "scripts": {
+    "test": "node --import tsx --test src/**/*.test.ts",
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "lint": "biome check .",
+    "lint:fix": "biome check --write .",
+    "fallow": "fallow",
+    "prepare": "lefthook install"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@biomejs/biome": "2.5.0",
+    "@types/node": "25.9.3",
+    "fallow": "2.99.0",
+    "lefthook": "2.1.9",
+    "tsx": "4.22.4",
+    "typescript": "6.0.3"
+  },
+  "devEngines": {
+    "packageManager": {
+      "name": "pnpm",
+      "version": "11.6.0",
+      "onFail": "download"
+    }
+  }
+}

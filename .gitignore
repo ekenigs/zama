@@ -1,0 +1,9 @@
+node_modules/
+dist/
+.env
+*.log
+output/
+**/.plan-url
+
+.pnpm-store/
+.fallow/

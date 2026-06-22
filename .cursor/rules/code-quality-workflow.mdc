@@ -1,0 +1,24 @@
+---
+description: Run lint, typecheck, tests, and fallow after every code change
+alwaysApply: true
+---
+
+# Code Quality Workflow
+
+After every code change, run these checks before considering the task complete:
+
+```bash
+pnpm lint
+pnpm typecheck
+pnpm test
+pnpm fallow
+```
+
+Run them in order. Fix any reported issues before finishing.
+
+- **lint** — Biome formatting and lint rules (`biome check .`)
+- **typecheck** — TypeScript type errors (`tsc --noEmit`)
+- **test** — Unit tests (`node --import tsx --test`)
+- **fallow** — Static analysis for unused code, complexity, and other cleanup signals
+
+If a check fails, address the failure and re-run all four to confirm nothing else regressed.

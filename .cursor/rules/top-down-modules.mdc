@@ -1,0 +1,47 @@
+---
+description: Top-down file layout — main functions first, helpers after
+alwaysApply: true
+---
+
+# Top-Down Module Layout
+
+Write files and modules top-down: the entry point and public API come first; helpers and implementation details follow.
+
+## Order Within a File
+
+1. Imports
+2. Types and constants (only what the public API needs at the top; move helper-only types near their helpers if clearer)
+3. **Main / exported functions** — the functions callers use
+4. **Helper functions** — private utilities, parsers, mappers, etc.
+
+## Rules
+
+- Put the function that defines the module's purpose near the top, not buried below helpers.
+- Keep helpers below the functions that call them. If helper A is only used by helper B, place A below B.
+- Do not hoist helpers above main logic for arbitrary grouping (e.g. "all pure functions first").
+- When adding code to an existing file, extend the same order — do not append helpers above existing main functions.
+
+## Example
+
+```typescript
+// ✅ GOOD — main first, helpers after
+export async function runCompliance(options: ComplianceOptions): Promise<Report> {
+  const evidence = await collectEvidence(options);
+  return buildReport(evidence);
+}
+
+function buildReport(evidence: Evidence): Report {
+  return { checks: evidence.checks.map(summarizeCheck) };
+}
+
+function summarizeCheck(check: Check): CheckSummary {
+  return { id: check.id, status: check.status };
+}
+
+// ❌ BAD — helpers before the exported entry point
+function summarizeCheck(check: Check): CheckSummary { /* ... */ }
+
+export async function runCompliance(options: ComplianceOptions): Promise<Report> {
+  /* ... */
+}
+```
