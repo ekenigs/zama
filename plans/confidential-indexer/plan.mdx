@@ -1,0 +1,488 @@
+<RichText id="overview">
+
+# Confidential ERC-7984 Indexer + Read API
+
+**Objective:** A single TypeScript monorepo that, from a fresh clone, runs an Envio indexer watching one ERC-7984 confidential token contract on a local fhEVM stack, persists transfer rows (with explicit `pending_decryption` states), decrypts entitled amounts in a dedicated worker via `@zama-fhe/sdk@alpha`, stores cleartext in Docker Postgres, and exposes a Fastify REST API that looks like a normal ERC-20-style indexer to wallet partners.
+
+**Done means:** `pnpm install && pnpm dev` starts Anvil + deployed contract + partner Postgres + Envio indexer + decrypt worker + API; a scripted confidential transfer produces a decrypted row in the DB and the same value via `GET /v1/addresses/:addr/balance` and transfer history; `DECISIONS.md` argues the trade-offs; one happy-path test and one negative test pass; `pnpm lint && pnpm typecheck && pnpm test && pnpm fallow` are green.
+
+**Non-goals for v1:** Multi-contract indexing, Sepolia deployment, production ops (k8s, metrics stack), wallet SDK, write endpoints, GraphQL partner API, real KMS/HSM key management.
+
+</RichText>
+
+<RichText id="concrete-example">
+
+### What the wallet partner sees
+
+Alice holds 1,000 USDC-equivalent confidential tokens. She transfers 250 to Bob. The partner calls:
+
+```
+GET /v1/addresses/0xAlice/balance        → { "balance": "1000000000", "decimals": 6, "status": "ok" }
+GET /v1/addresses/0xAlice/transfers     → [
+  { "kind": "transfer", "to": "0xBob", "amount": { "status": "decrypted", "value": "250000000" }, ... },
+  { "kind": "wrap", "amount": { "status": "decrypted", "value": "1000000000" }, ... }
+]
+GET /v1/indexer/status                  → { "healthy": true, "chainId": 31337, "latestBlock": 42, "indexedBlock": 42, "pendingDecryptions": 0 }
+```
+
+Amounts the indexer cannot decrypt yet surface as `{ "status": "pending_decryption" }` — never omitted. When ACL delegation arrives later, a backfill pass upgrades rows to cleartext.
+
+</RichText>
+
+<Diagram
+  id="architecture"
+  data={{
+    html: `<div class="diagram-panel" data-rough style="display:flex;flex-direction:column;gap:16px;padding:8px">
+  <div style="display:flex;gap:12px;flex-wrap:wrap">
+    <div class="diagram-card" style="flex:1;min-width:130px">
+      <div class="diagram-muted">Local chain</div>
+      <div class="diagram-node">Anvil :8545</div>
+      <div class="diagram-box">forge-fhevm host</div>
+      <div class="diagram-box">ERC-7984 wrapper</div>
+    </div>
+    <div class="diagram-card" style="flex:1;min-width:130px">
+      <div class="diagram-muted">Ingestion</div>
+      <div class="diagram-node">apps/indexer</div>
+      <div class="diagram-box">Envio handlers</div>
+      <div class="diagram-pill">insert pending rows only</div>
+    </div>
+    <div class="diagram-card" style="flex:1;min-width:130px">
+      <div class="diagram-muted">Decrypt</div>
+      <div class="diagram-node">apps/worker</div>
+      <div class="diagram-box">poll + batch decrypt</div>
+      <div class="diagram-box">@zama-fhe/sdk</div>
+    </div>
+    <div class="diagram-card" style="flex:1;min-width:130px">
+      <div class="diagram-muted">Partner store</div>
+      <div class="diagram-node">Postgres 18 :5432</div>
+      <div class="diagram-box">packages/db Drizzle</div>
+      <div class="diagram-pill">transfers · balances</div>
+    </div>
+    <div class="diagram-card" style="flex:1;min-width:130px">
+      <div class="diagram-muted">Read path</div>
+      <div class="diagram-node">apps/api :3000</div>
+      <div class="diagram-box">GET /v1/balance</div>
+      <div class="diagram-box">GET /v1/transfers</div>
+    </div>
+  </div>
+  <div class="diagram-muted" style="text-align:center">One Postgres 18 server — two databases: envio (sync plumbing) and zama (partner cleartext).</div>
+</div>`,
+    css: `.diagram-card { border: 1px solid var(--wf-line); border-radius: 8px; padding: 12px; background: var(--wf-card); display: flex; flex-direction: column; gap: 8px; } .diagram-node { font-weight: 600; } .diagram-box { padding: 6px 8px; border-radius: 4px; background: var(--wf-paper); border: 1px dashed var(--wf-line); font-size: 0.9em; }`,
+    caption: "Chain events → fast Envio ingest → async worker decrypt → shared Postgres → Fastify API.",
+  }}
+/>
+
+<Callout id="decision-chain" tone="decision">
+
+**Local forge-fhevm over Sepolia for v1.** Anvil + `deploy-local.sh` gives deterministic host contracts, instant blocks, and scripted transfers without faucet/RPC flakiness. Sepolia remains a documented follow-up once the decrypt + persistence loop is proven. Record the final choice in `DECISIONS.md` during step 0.
+
+</Callout>
+
+<Callout id="decision-contract" tone="decision">
+
+**Test token: OpenZeppelin `openzeppelin-confidential-contracts`.** Step 1 vendors IERC7984 + `ERC7984ERC20Wrapper` from [OpenZeppelin confidential contracts](https://github.com/OpenZeppelin/openzeppelin-confidential-contracts) as a Foundry git dependency. Event names and parameter shapes in `apps/indexer/config.yaml` are derived from that ABI — not from Zama templates or SDK examples.
+
+</Callout>
+
+<Callout id="decision-scope" tone="decision">
+
+**v1 ships full scope — no deferrals.** All four indexed events (`ConfidentialTransfer`, `Wrap`, `UnwrapRequested`, `UnwrapFinalized`), the `balances` table with on-chain `balanceOf` derivation, ACL backfill via `apps/worker` poll loop, decrypt worker + read API + E2E tests. Steps 0–7 as written.
+
+</Callout>
+
+<RichText id="repo-layout">
+
+### Repository layout (target)
+
+Starting from the current empty `zama` scaffold (`src/main.ts` placeholder), we grow a standard pnpm workspace with `apps/` for runnable processes and `packages/` for shared libraries:
+
+</RichText>
+
+<FileTree
+  id="file-tree"
+  title="Monorepo structure"
+  entries={[
+    { path: "DECISIONS.md", change: "modified", note: "Decision log — grows each step" },
+    { path: "README.md", change: "added", note: "Clone → run → test instructions" },
+    { path: ".env.example", change: "added", note: "RPC, contract, indexer key, DATABASE_URL" },
+    { path: "docker-compose.yml", change: "added", note: "postgres:18 :5432 — init creates envio + zama databases" },
+    { path: "contracts/", change: "added", note: "Foundry + OZ openzeppelin-confidential-contracts; deploy ERC7984ERC20Wrapper" },
+    { path: "apps/indexer/", change: "added", note: "Envio HyperIndex v3 — fast ingest only" },
+    { path: "apps/indexer/config.yaml", change: "added", note: "Single contract, local chain, event list" },
+    { path: "apps/indexer/src/handlers/confidential-token.ts", change: "added", note: "Insert pending rows; no SDK calls" },
+    { path: "apps/worker/", change: "added", note: "Decrypt daemon — polls DB, calls SDK, updates rows" },
+    { path: "apps/worker/src/loop.ts", change: "added", note: "Batch pending_decryption → decrypted + balance refresh" },
+    { path: "apps/api/", change: "added", note: "Fastify read API" },
+    { path: "packages/db/", change: "added", note: "Drizzle schema + Postgres client (shared)" },
+    { path: "packages/db/schema.ts", change: "added", note: "transfers, balances, indexer_state, decrypt_attempts; created_at + updated_at on every table" },
+    { path: "packages/decrypt/", change: "added", note: "@zama-fhe/sdk wrapper — tryDecrypt, balanceOf decrypt" },
+    { path: "scripts/dev.sh", change: "added", note: "Anvil, deploy, docker db, indexer, worker, api" },
+    { path: "tests/e2e/indexer-api.test.ts", change: "added", note: "Happy path + negative test" },
+  ]}
+/>
+
+<DataModel
+  id="data-model"
+  entities={[
+    {
+      id: "transfers",
+      name: "transfers",
+      fields: [
+        { name: "id", type: "text", pk: true, note: "txHash-logIndex" },
+        { name: "tx_hash", type: "text" },
+        { name: "log_index", type: "integer" },
+        { name: "block_number", type: "bigint" },
+        { name: "block_timestamp", type: "timestamptz" },
+        { name: "kind", type: "text", note: "transfer | wrap | unwrap_request | unwrap_finalize" },
+        { name: "from_address", type: "text" },
+        { name: "to_address", type: "text" },
+        { name: "amount_handle", type: "text", note: "bytes32 hex — always stored" },
+        { name: "amount_status", type: "text", note: "pending_decryption | decrypted | failed" },
+        { name: "amount_cleartext", type: "text", nullable: true, note: "string uint — null until decrypted" },
+        { name: "contract_address", type: "text" },
+        { name: "chain_id", type: "integer" },
+        { name: "created_at", type: "timestamptz", note: "row insert time (DB clock)" },
+        { name: "updated_at", type: "timestamptz", note: "last mutation — e.g. worker sets cleartext" },
+      ],
+    },
+    {
+      id: "balances",
+      name: "balances",
+      fields: [
+        { name: "address", type: "text", pk: true },
+        { name: "contract_address", type: "text", pk: true },
+        { name: "balance_cleartext", type: "text", note: "cleartext from balanceOf handle decrypt" },
+        { name: "balance_status", type: "text", note: "ok | stale | pending_decryption" },
+        { name: "block_number", type: "bigint", note: "block when balanceOf handle was read" },
+        { name: "created_at", type: "timestamptz", note: "first time address seen" },
+        { name: "updated_at", type: "timestamptz", note: "last balance refresh" },
+      ],
+    },
+    {
+      id: "indexer_state",
+      name: "indexer_state",
+      fields: [
+        { name: "id", type: "text", pk: true, note: "singleton: default" },
+        { name: "chain_id", type: "integer" },
+        { name: "contract_address", type: "text" },
+        { name: "indexed_block", type: "bigint" },
+        { name: "latest_chain_block", type: "bigint" },
+        { name: "pending_decryption_count", type: "integer" },
+        { name: "last_error", type: "text", nullable: true },
+        { name: "created_at", type: "timestamptz" },
+        { name: "updated_at", type: "timestamptz" },
+      ],
+    },
+    {
+      id: "decrypt_attempts",
+      name: "decrypt_attempts",
+      fields: [
+        { name: "id", type: "text", pk: true, note: "uuid" },
+        { name: "transfer_id", type: "text", fk: "transfers.id" },
+        { name: "attempt_num", type: "integer", note: "1-indexed retry count" },
+        { name: "outcome", type: "text", note: "success | acl_denied | sdk_error | timeout" },
+        { name: "error_message", type: "text", nullable: true },
+        { name: "created_at", type: "timestamptz", note: "when attempt started" },
+        { name: "updated_at", type: "timestamptz", note: "same as created_at for append-only rows" },
+      ],
+    },
+  ]}
+  relations={[
+    { from: "decrypt_attempts", to: "transfers", kind: "1-n" },
+  ]}
+/>
+
+<RichText id="events-indexed">
+
+### On-chain events to index
+
+From **OpenZeppelin `openzeppelin-confidential-contracts`** (IERC7984 / `ERC7984ERC20Wrapper`). The indexer watches **one** deployed wrapper contract:
+
+| Event | Purpose |
+| --- | --- |
+| `ConfidentialTransfer(from, to, amount)` | All movements including mint/burn semantics |
+| `Wrap(to, amount, encryptedAmount)` | Shield / wrap from ERC-20 |
+| `UnwrapRequested(receiver, unwrapRequestId, encryptedAmount)` | Unshield step 1 |
+| `UnwrapFinalized(receiver, unwrapRequestId, encryptedAmount, cleartextAmount)` | Unshield step 2 — cleartext amount on-chain |
+
+`UnwrapFinalized.cleartextAmount` can be stored directly; encrypted handles from other events go through SDK decrypt when entitled.
+
+Event signatures are taken from the OpenZeppelin confidential-contracts ABI; reconcile exact selectors in step 1 before writing `apps/indexer/config.yaml`.
+
+</RichText>
+
+<RichText id="api-contract">
+
+### Read API contract (v1)
+
+REST under `/v1`. JSON only. Addresses lowercased in storage; accept checksummed or lowercase in queries.
+
+</RichText>
+
+<Endpoint
+  id="ep-health"
+  method="GET"
+  path="/v1/indexer/status"
+  summary="Indexer health and sync lag"
+  responses={[
+    {
+      status: "200",
+      description: "Indexer is running",
+      example: '{ "healthy": true, "chainId": 31337, "contract": "0x...", "indexedBlock": 120, "latestBlock": 120, "blocksBehind": 0, "pendingDecryptions": 2, "startedAt": "2026-06-23T08:00:00Z" }',
+    },
+    {
+      status: "503",
+      description: "Indexer unreachable or DB missing",
+    },
+  ]}
+/>
+
+<Endpoint
+  id="ep-balance"
+  method="GET"
+  path="/v1/addresses/:address/balance"
+  summary="Current cleartext balance for an address"
+  params={[
+    { name: "address", in: "path", type: "string", required: true, description: "0x-prefixed address" },
+    { name: "contract", in: "query", type: "string", description: "Override token contract (default from env)" },
+  ]}
+  responses={[
+    {
+      status: "200",
+      example: '{ "address": "0xalice", "contract": "0xtoken", "balance": "1000000", "decimals": 6, "status": "ok", "blockNumber": 120 }',
+    },
+    {
+      status: "200",
+      description: "Balance handle known but not decryptable yet",
+      example: '{ "address": "0xalice", "balance": null, "status": "pending_decryption", "blockNumber": 120 }',
+    },
+    {
+      status: "404",
+      description: "Address never seen on-chain",
+    },
+  ]}
+/>
+
+<Endpoint
+  id="ep-transfers"
+  method="GET"
+  path="/v1/addresses/:address/transfers"
+  summary="Transfer history with cleartext where available"
+  params={[
+    { name: "address", in: "path", type: "string", required: true },
+    { name: "limit", in: "query", type: "integer", description: "Default 50, max 200" },
+    { name: "cursor", in: "query", type: "string", description: "Opaque pagination cursor (block+logIndex)" },
+    { name: "direction", in: "query", type: "string", description: "in | out | all (default all)" },
+  ]}
+  responses={[
+    {
+      status: "200",
+      example: '{ "items": [{ "id": "0xabc-3", "kind": "transfer", "from": "0xalice", "to": "0xbob", "amount": { "status": "decrypted", "value": "250000" }, "blockNumber": 99, "txHash": "0xabc" }], "nextCursor": null }',
+    },
+    {
+      status: "200",
+      description: "Address never seen — empty list, not 404 (wallet can distinguish unknown vs no activity via balance 404)",
+      example: '{ "items": [], "nextCursor": null }',
+    },
+  ]}
+/>
+
+<Callout id="decision-dual-db" tone="decision">
+
+**One Postgres 18 server, two databases.** You do not need two Postgres *instances*. A single `postgres:18` container (started by `docker compose` in `dev.sh`) hosts two logical databases:
+
+| Database | Owner | Connection |
+| --- | --- | --- |
+| `envio` | Envio HyperIndex (sync cursors, generated entities, Hasura) | `ENVIO_PG_DATABASE=envio` (+ user/password/port) |
+| `zama` | Partner store (transfers, balances, cleartext) | `DATABASE_URL=postgresql://…/zama` |
+
+An init script (`docker/postgres/init.sql`) runs `CREATE DATABASE envio` and `CREATE DATABASE zama` on first boot. Envio is pointed at the existing server via `ENVIO_PG_*` env vars so it does not spawn a second Postgres container. Partner cleartext never goes into the `envio` database — same isolation as separate instances, less Docker overhead.
+
+</Callout>
+
+<Callout id="decision-worker" tone="decision">
+
+**Decrypt in `apps/worker`, not in Envio handlers.** Event handlers only persist rows with `amount_status: pending_decryption` and enqueue affected addresses for balance refresh. `apps/worker` polls `pending_decryption` rows in batches, calls `packages/decrypt.tryDecrypt`, writes cleartext, refreshes `balances` via on-chain `balanceOf`, and logs `decrypt_attempts`. Network-bound KMS calls never block indexing throughput. ACL delegation backfill is the same loop — no separate `onBlock` hook required.
+
+</Callout>
+
+<Callout id="decision-balance-derive" tone="decision">
+
+**Balance from on-chain `balanceOf`, not transfer sums.** The worker calls `token.balanceOf(address)` after decrypting transfer amounts for affected addresses, attempts decrypt on the balance handle, and upserts `balances` with `block_number`. Transfer amounts and balance handles are separate FHE objects. Treat `from == 0x0` as `kind: mint` and `to == 0x0` as `kind: burn`; exclude the zero address from balance queries and transfer history.
+
+</Callout>
+
+<Callout id="decision-decrypt-states" tone="decision">
+
+**Never silently drop undecryptable events.** Every indexed transfer is inserted with `amount_handle` and `amount_status: pending_decryption`. The worker upgrades to `decrypted` + `amount_cleartext` on success. On ACL denial → stay pending (`decrypt_attempts.outcome = acl_denied`). On SDK error or timeout (cap ~5 s per batch item) → stay pending for retry. Crash between insert and worker pass is safe — the row stays pending and the next poll picks it up.
+
+</Callout>
+
+<RichText id="implementation-roadmap">
+
+### Implementation roadmap — 8 steps
+
+Each step has its own plan file under `plans/confidential-indexer/steps/`. We implement **one step per session**; update `.plan-state.json` and `DECISIONS.md` before moving on. Step plans are written when we start that step (not all upfront).
+
+</RichText>
+
+<Checklist
+  id="master-checklist"
+  items={[
+    { id: "step-0", label: "Step 0 — Monorepo scaffold & dev stack", checked: false, note: "apps/ + packages/ workspace, docker-compose, forge-fhevm, dev.sh" },
+    { id: "step-1", label: "Step 1 — ERC-7984 test contract & fixtures", checked: false, note: "OZ openzeppelin-confidential-contracts; deploy wrapper; wrap + transfer fixtures" },
+    { id: "step-2", label: "Step 2 — Postgres 18 + Drizzle schema", checked: false, note: "packages/db, migrations, docker postgres:18 with envio + zama DBs" },
+    { id: "step-3", label: "Step 3 — Envio indexer (ingest only)", checked: false, note: "apps/indexer handlers write pending rows to partner DB" },
+    { id: "step-4", label: "Step 4 — Decrypt worker + Zama SDK", checked: false, note: "apps/worker polls, packages/decrypt, ACL backfill" },
+    { id: "step-5", label: "Step 5 — Fastify read API", checked: false, note: "apps/api — three endpoints, pagination, errors" },
+    { id: "step-6", label: "Step 6 — Tests", checked: false, note: "E2E happy path; negative: undecryptable amount stays pending" },
+    { id: "step-7", label: "Step 7 — DECISIONS.md polish & README", checked: false, note: "Reflection prompts, SDK feedback, AI assistance section" },
+  ]}
+/>
+
+<RichText id="step-0-preview">
+
+### Next session
+
+Plan approved. Author `steps/step-0-scaffold.mdx` and implement the monorepo scaffold + local fhEVM dev stack (step 0).
+
+</RichText>
+
+<RichText id="plan-status">
+
+### Plan status
+
+All review questions resolved:
+
+| Decision | Choice |
+| --- | --- |
+| Test ERC-7984 token | OpenZeppelin `openzeppelin-confidential-contracts` |
+| v1 scope | Full scope — no deferrals |
+
+</RichText>
+
+<RichText id="decryption-approach">
+
+### Decryption approach (steps 3–4)
+
+**Ingest (apps/indexer):** Envio handlers parse events and `INSERT` into partner Postgres via `packages/db`. No SDK imports in handlers — handlers stay fast and replay-safe.
+
+**Decrypt (apps/worker):** A dedicated Node process runs a poll loop (e.g. every 2 s, batch LIMIT 50):
+
+1. `SELECT` rows where `amount_status = pending_decryption` (or `balances.balance_status = pending_decryption`).
+2. Call `packages/decrypt.tryDecrypt({ handle, contract, from, to, blockNumber })` using indexer EOA (`INDEXER_PRIVATE_KEY`).
+3. SDK path (alpha): confirm `@zama-fhe/sdk@alpha` local fhEVM config; verify server-side EIP-712 signing (no browser). Use `userDecrypt` when indexer is transfer party; `delegatedUserDecrypt` when ACL delegation exists.
+4. On success: update transfer row + call `balanceOf(from)` / `balanceOf(to)` and decrypt balance handles.
+5. Log every attempt in `decrypt_attempts` (1-n per transfer).
+
+**v1 fixture model:** happy-path uses indexer EOA as transfer recipient; second fixture grants ACL delegation to exercise worker backfill on previously pending rows.
+
+</RichText>
+
+<TabsBlock
+  id="key-files-tabs"
+  tabs={[
+    {
+      id: "tab-handler",
+      label: "indexer handler (sketch)",
+      blocks: [
+        {
+          id: "tab-handler-code",
+          type: "annotated-code",
+          data: {
+            filename: "apps/indexer/src/handlers/confidential-token.ts",
+            language: "ts",
+            code: "import { indexer } from \"envio\";\nimport { db, transfers } from \"@zama-indexer/db\";\n\nindexer.onEvent(\n  { contract: \"ConfidentialToken\", event: \"ConfidentialTransfer\" },\n  async ({ event }) => {\n    const id = `${event.transaction.hash}-${event.logIndex}`;\n\n    await db.insert(transfers).values({\n      id,\n      txHash: event.transaction.hash,\n      logIndex: event.logIndex,\n      blockNumber: event.block.number,\n      fromAddress: event.params.from,\n      toAddress: event.params.to,\n      amountHandle: event.params.amount,\n      amountStatus: \"pending_decryption\",\n      kind: resolveKind(event.params.from, event.params.to),\n    }).onConflictDoNothing();\n\n    // Worker picks up pending rows — no SDK call here.\n  },\n);",
+            annotations: [
+              { lines: "8-20", note: "Insert pending row only — never drop, never block on KMS." },
+              { lines: "22", note: "Decrypt is apps/worker responsibility." },
+            ],
+          },
+        },
+      ],
+    },
+    {
+      id: "tab-worker",
+      label: "decrypt worker (sketch)",
+      blocks: [
+        {
+          id: "tab-worker-code",
+          type: "annotated-code",
+          data: {
+            filename: "apps/worker/src/loop.ts",
+            language: "ts",
+            code: "import { db, transfers } from \"@zama-indexer/db\";\nimport { tryDecrypt, refreshBalances } from \"@zama-indexer/decrypt\";\n\nexport async function runDecryptLoop(signal: AbortSignal) {\n  while (!signal.aborted) {\n    const pending = await db.query.transfers.findMany({\n      where: eq(transfers.amountStatus, \"pending_decryption\"),\n      limit: 50,\n    });\n\n    for (const row of pending) {\n      const cleartext = await tryDecrypt(row);\n\n      if (cleartext !== null) {\n        await db.update(transfers)\n          .set({ amountStatus: \"decrypted\", amountCleartext: cleartext })\n          .where(eq(transfers.id, row.id));\n        await refreshBalances(row.fromAddress, row.toAddress);\n      }\n    }\n\n    await sleep(2000, signal);\n  }\n}",
+            annotations: [
+              { lines: "6-9", note: "Batch poll — same loop handles ACL backfill when rights arrive later." },
+              { lines: "11-18", note: "Network-bound SDK work isolated from Envio throughput." },
+            ],
+          },
+        },
+      ],
+    },
+    {
+      id: "tab-api",
+      label: "API route (sketch)",
+      blocks: [
+        {
+          id: "tab-api-code",
+          type: "annotated-code",
+          data: {
+            filename: "apps/api/src/routes/balance.ts",
+            language: "ts",
+            code: "export async function getBalance(\n  request: FastifyRequest<{ Params: { address: string } }>,\n  reply: FastifyReply,\n) {\n  const address = normalizeAddress(request.params.address);\n  const row = await db.query.balances.findFirst({\n    where: and(\n      eq(balances.address, address),\n      eq(balances.contractAddress, env.CONTRACT_ADDRESS),\n    ),\n  });\n\n  if (!row) {\n    return reply.status(404).send({ error: \"address_not_found\" });\n  }\n\n  return {\n    address,\n    contract: env.CONTRACT_ADDRESS,\n    balance: row.balanceCleartext,\n    status: row.balanceStatus,\n    decimals: env.TOKEN_DECIMALS,\n    blockNumber: row.blockNumber,\n  };\n}",
+            annotations: [
+              { lines: "16-18", note: "404 only when address never appeared — not when pending decrypt." },
+              { lines: "20-27", note: "Partners see ERC-20-shaped JSON; FHE is fully hidden." },
+            ],
+          },
+        },
+      ],
+    },
+  ]}
+/>
+
+<RichText id="testing-strategy">
+
+### Testing strategy (step 6)
+
+**Happy path:** Spin Anvil + deploy + `pnpm dev` (indexer + worker + api). Execute wrap + `ConfidentialTransfer` where indexer EOA is `to`. Wait for worker poll. Assert Postgres row is decrypted and API returns matching cleartext.
+
+**Negative test (chosen):** Transfer between two third-party addresses where indexer has **no** ACL rights. Assert: transfer appears in API with `amount.status === "pending_decryption"`; `pendingDecryptions` increments; row is **not** deleted. Rationale: the brief explicitly forbids silent drops — this is the highest-risk regression.
+
+</RichText>
+
+<RichText id="risks">
+
+### Risks
+
+- **Worker lag:** API may return `pending_decryption` briefly between ingest and worker poll — document expected latency in `/v1/indexer/status` (`pendingDecryptions` count).
+- **SDK alpha API drift:** Pin exact alpha version; follow `zama-ai/sdk` prerelease examples (viem flavour). Confirm server-side `userDecrypt` before step 4.
+- **Docker requirement:** `dev.sh` starts one `postgres:18` container (two databases) plus Envio/Hasura services — document clearly.
+- **Local fhEVM ≠ Sepolia:** Decrypt config differs; abstract chain config in `packages/decrypt/config.ts`.
+- **Decrypt timeouts:** Cap per-item SDK calls (~5 s); log `decrypt_attempts.outcome = timeout`, leave row pending.
+- **REST auth:** No auth on v1 — local dev / toy keys only. Document that production would need API keys or mTLS.
+
+</RichText>
+
+<RichText id="progress-tracking">
+
+Progress lives in `.plan-state.json`, per-step plans under `steps/`, and `DECISIONS.md` — updated after each step.
+
+</RichText>
+
+<RichText id="verification">
+
+### Final verification (after step 7)
+
+```bash
+git clone <repo> && cd zama && pnpm install
+cp .env.example .env
+pnpm dev          # anvil + deploy + docker db + indexer + worker + api
+pnpm test         # e2e happy + negative
+pnpm lint && pnpm typecheck && pnpm fallow
+curl localhost:3000/v1/indexer/status
+curl localhost:3000/v1/addresses/0x.../balance
+```
+
+</RichText>
