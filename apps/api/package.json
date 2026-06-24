@@ -1,0 +1,21 @@
+{
+  "name": "@zama-indexer/api",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/main.ts",
+    "start": "tsx src/main.ts",
+    "typecheck": "tsc --noEmit",
+    "build": "pnpm typecheck"
+  },
+  "dependencies": {
+    "@zama-indexer/db": "workspace:*",
+    "@zama-indexer/env": "workspace:*",
+    "fastify": "5.8.2"
+  },
+  "devDependencies": {
+    "@types/node": "25.9.3",
+    "tsx": "4.22.4",
+    "typescript": "6.0.3"
+  }
+}

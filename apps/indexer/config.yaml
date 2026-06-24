@@ -1,0 +1,23 @@
+# yaml-language-server: $schema=./node_modules/envio/evm.schema.json
+name: confidential-token-indexer
+description: ERC-7984 confidential token indexer (ingest only)
+contracts:
+  - name: ConfidentialToken
+    abi_file_path: ./abis/ConfidentialToken.json
+    handler: ./src/handlers/confidential-token.ts
+    events:
+      - event: ConfidentialTransfer(address indexed from, address indexed to, bytes32 indexed amount)
+      - event: UnwrapRequested(address indexed receiver, bytes32 indexed unwrapRequestId, bytes32 amount)
+      - event: UnwrapFinalized(address indexed receiver, bytes32 indexed unwrapRequestId, bytes32 encryptedAmount, uint64 cleartextAmount)
+chains:
+  - id: 31337
+    start_block: 0
+    rpc:
+      - url: http://127.0.0.1:8545
+        for: sync
+      - url: http://127.0.0.1:8545
+        for: realtime
+    contracts:
+      - name: ConfidentialToken
+        address:
+          - "0x0000000000000000000000000000000000000000"

@@ -11,7 +11,8 @@
       "!!**/dist",
       "!!**/node_modules",
       "!!**/output",
-      "!!.vscode"
+      "!!.vscode",
+      "!!**/packages/db/src/migrations/meta"
     ]
   },
   "formatter": {

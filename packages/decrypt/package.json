@@ -1,0 +1,22 @@
+{
+  "name": "@zama-indexer/decrypt",
+  "version": "1.0.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@zama-fhe/sdk": "3.1.1-alpha.3",
+    "@zama-indexer/db": "workspace:*",
+    "@zama-indexer/env": "workspace:*",
+    "viem": "2.47.0"
+  },
+  "devDependencies": {
+    "@types/node": "25.9.3",
+    "tsx": "4.22.4",
+    "typescript": "6.0.3"
+  }
+}

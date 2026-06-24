@@ -1,23 +1,33 @@
 {
   "name": "zama",
   "version": "1.0.0",
+  "private": true,
   "type": "module",
   "engines": {
     "node": ">=24.0.0"
   },
   "scripts": {
-    "test": "node --import tsx --test src/**/*.test.ts",
-    "build": "tsc",
-    "typecheck": "tsc --noEmit",
+    "build": "pnpm -r typecheck",
+    "typecheck": "pnpm -r typecheck",
+    "test": "node --import tsx --test tests/**/*.test.ts",
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
     "fallow": "fallow",
-    "prepare": "lefthook install"
+    "prepare": "lefthook install",
+    "db:generate": "pnpm --filter @zama-indexer/db generate",
+    "db:migrate": "pnpm --filter @zama-indexer/db migrate",
+    "dev": "bash scripts/dev.sh",
+    "dev:api": "pnpm --filter @zama-indexer/api dev",
+    "dev:worker": "pnpm --filter @zama-indexer/worker dev",
+    "dev:indexer": "pnpm --filter @zama-indexer/indexer dev",
+    "dev:db": "docker compose up -d postgres"
   },
-  "dependencies": {},
   "devDependencies": {
     "@biomejs/biome": "2.5.0",
     "@types/node": "25.9.3",
+    "@zama-indexer/db": "workspace:*",
+    "@zama-indexer/env": "workspace:*",
+    "fastify": "5.8.2",
     "fallow": "2.99.0",
     "lefthook": "2.1.9",
     "tsx": "4.22.4",

@@ -1,0 +1,3 @@
+type IndexerState {
+  id: ID!
+}

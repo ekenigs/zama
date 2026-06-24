@@ -70,4 +70,66 @@ The master plan recommends the following; each will be confirmed or revised as w
 
 **Alternatives considered:** Zama `fhevm-foundry-template` (minimal, would need extension); contract from `zama-ai/sdk` examples (SDK-coupled, maturity unknown).
 
-**Consequences:** Step 1 adds OZ as `forge install` dependency; `apps/indexer/config.yaml` event list follows OZ ABI exactly.
+### 2026-06-23 — Monorepo layout and Postgres topology (step 0)
+
+**Decision:** `apps/*` + `packages/*` workspace; one Postgres 18 container with databases `envio` and `zama`.
+
+**Context:** Need clean pnpm boundaries between runnable services (api, indexer, worker) and shared libraries (db, decrypt).
+
+**Choice:** `pnpm-workspace.yaml` globs `apps/*` and `packages/*`. Docker `init.sql` creates both databases on first boot. Partner data lives in `zama`; Envio sync tables in `envio`.
+
+**Alternatives considered:** Flat `src/api` + `indexer/` at root (awkward tsconfig); PGlite (rejected — need real Postgres for Envio + Drizzle parity).
+
+**Consequences:** `DATABASE_URL` points at `zama`; `ENVIO_PG_*` points at `envio`. Migrations run only against `zama`.
+
+### 2026-06-23 — Envio ingest writes partner Postgres directly (step 3)
+
+**Decision:** Envio handlers call `@zama-indexer/db` query helpers; no Zama SDK in handlers.
+
+**Context:** Indexing must stay fast and replay-safe. Decryption is network-bound.
+
+**Choice:** `apps/indexer/src/handlers/confidential-token.ts` inserts `pending_decryption` rows (or `decrypted` for `UnwrapFinalized` cleartext). `from == 0x0` classified as `kind: wrap` (OZ has no `Wrap` event).
+
+**Alternatives considered:** Envio GraphQL entities only (would duplicate schema); inline decrypt in handlers (blocks throughput).
+
+**Consequences:** Handler file is a manual fallow entry point. Envio `schema.graphql` is minimal stub — partner tables are Drizzle-owned.
+
+### 2026-06-23 — Zama SDK decrypt path (step 4)
+
+**Decision:** `packages/decrypt` wraps `@zama-fhe/sdk@3.1.1-alpha.3` with viem clients and `cleartext()` relayer for local Anvil.
+
+**Context:** Alpha SDK API surface differs from stable docs; need server-side decrypt without browser.
+
+**Choice:** `sdk.decryption.decryptValues()` on transfer handles; `token.balanceOf()` for balance refresh. Worker polls pending rows.
+
+**Alternatives considered:** `decryptHandle` (not exposed on current alpha build); KMS HTTP calls directly (too low-level).
+
+**Consequences:** Full fhEVM ACL/delegation flow not fully exercised in CI without `forge-fhevm` + deployed contract — see reflection below.
+
+---
+
+## Reflection (submission)
+
+### Least confident piece
+
+End-to-end decrypt against a live fhEVM host. The worker and SDK wiring are in place, but verifying `decryptValues` + ACL delegation requires Foundry, `vendor/forge-fhevm`, and a deployed OZ wrapper on Anvil — not runnable in this environment without Docker + Foundry installed. The E2E tests validate API/DB contract with seeded rows instead of a full chain loop.
+
+### What was cut or deferred
+
+- **Sepolia / testnet** — local Anvil only.
+- **Event-driven decrypt queue** — v1 uses poll loop (documented above).
+- **REST authentication** — open `/v1/*` for local dev.
+- **Full chain E2E in CI** — DB-level E2E only; chain fixtures documented in README.
+- **Hasura / Envio TUI** — disabled via `ENVIO_HASURA=false`.
+
+### SDK feedback (`@zama-fhe/sdk@alpha`)
+
+- **Positive:** Viem `createConfig` with `cleartext()` relayer is straightforward for local Anvil.
+- **Friction:** Prerelease blocked by pnpm `minimumReleaseAge` — needed an exclude entry.
+- **Friction:** API naming drift (`decryptValues` vs docs mentioning `userDecrypt` / `decryptHandle`) — had to read generated `.d.ts` files.
+- **Missing:** A minimal "indexer EOA decrypt transfer amount" recipe in repo examples without browser wallet flow.
+
+### AI assistance
+
+Planning and scaffolding were pair-programmed with Cursor (visual plan → approved MDX → incremental implementation). AI generated initial monorepo layout, Drizzle schema, Envio handlers, worker loop, and API routes. Human decisions (Postgres over PGlite, `apps/worker` poll model, OZ token choice) were captured in `DECISIONS.md` during review. AI fixed TypeScript strict env access, fallow entry points, and handler deduplication in a follow-up pass.
+

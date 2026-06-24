@@ -1,0 +1,20 @@
+{
+  "name": "@zama-indexer/indexer",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "codegen": "envio codegen",
+    "dev": "envio dev",
+    "start": "envio start",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@zama-indexer/db": "workspace:*",
+    "envio": "3.2.1"
+  },
+  "devDependencies": {
+    "@types/node": "25.9.3",
+    "tsx": "4.22.4",
+    "typescript": "6.0.3"
+  }
+}

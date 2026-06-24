@@ -1,0 +1,33 @@
+[
+  {
+    "type": "event",
+    "name": "ConfidentialTransfer",
+    "inputs": [
+      { "name": "from", "type": "address", "indexed": true },
+      { "name": "to", "type": "address", "indexed": true },
+      { "name": "amount", "type": "bytes32", "indexed": true }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "UnwrapRequested",
+    "inputs": [
+      { "name": "receiver", "type": "address", "indexed": true },
+      { "name": "unwrapRequestId", "type": "bytes32", "indexed": true },
+      { "name": "amount", "type": "bytes32", "indexed": false }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "UnwrapFinalized",
+    "inputs": [
+      { "name": "receiver", "type": "address", "indexed": true },
+      { "name": "unwrapRequestId", "type": "bytes32", "indexed": true },
+      { "name": "encryptedAmount", "type": "bytes32", "indexed": false },
+      { "name": "cleartextAmount", "type": "uint64", "indexed": false }
+    ],
+    "anonymous": false
+  }
+]

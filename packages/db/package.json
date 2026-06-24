@@ -1,0 +1,24 @@
+{
+  "name": "@zama-indexer/db",
+  "version": "1.0.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "generate": "drizzle-kit generate",
+    "migrate": "tsx src/migrate.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@zama-indexer/env": "workspace:*",
+    "drizzle-orm": "0.45.1",
+    "postgres": "3.4.8"
+  },
+  "devDependencies": {
+    "@types/node": "25.9.3",
+    "drizzle-kit": "0.31.9",
+    "tsx": "4.22.4",
+    "typescript": "6.0.3"
+  }
+}

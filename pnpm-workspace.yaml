@@ -1,6 +1,13 @@
+packages:
+  - apps/*
+  - packages/*
+
 minimumReleaseAge: 1440
 minimumReleaseAgeStrict: true
+minimumReleaseAgeExclude:
+  - '@zama-fhe/sdk'
 saveExact: true
 allowBuilds:
   esbuild: true
+  keccak: true
   lefthook: true

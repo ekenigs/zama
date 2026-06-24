@@ -1,56 +1,56 @@
 {
   "planId": "confidential-indexer",
   "title": "Confidential ERC-7984 Indexer + Read API",
-  "status": "approved",
+  "status": "implemented",
   "createdAt": "2026-06-23",
-  "currentStep": null,
+  "currentStep": "step-7",
   "steps": [
     {
       "id": "step-0",
       "title": "Monorepo scaffold & local fhEVM dev stack",
-      "status": "pending",
+      "status": "completed",
       "planFile": "steps/step-0-scaffold.mdx"
     },
     {
       "id": "step-1",
       "title": "ERC-7984 test contract & on-chain fixtures",
-      "status": "pending",
+      "status": "completed",
       "planFile": "steps/step-1-contracts.mdx"
     },
     {
       "id": "step-2",
       "title": "Postgres 18 schema (Drizzle) & shared DB package",
-      "status": "pending",
+      "status": "completed",
       "planFile": "steps/step-2-database.mdx"
     },
     {
       "id": "step-3",
       "title": "Envio indexer — fast ingest, pending rows only",
-      "status": "pending",
+      "status": "completed",
       "planFile": "steps/step-3-indexer.mdx"
     },
     {
       "id": "step-4",
       "title": "Decrypt worker + Zama SDK layer",
-      "status": "pending",
+      "status": "completed",
       "planFile": "steps/step-4-decryption.mdx"
     },
     {
       "id": "step-5",
       "title": "Fastify read API (apps/api)",
-      "status": "pending",
+      "status": "completed",
       "planFile": "steps/step-5-api.mdx"
     },
     {
       "id": "step-6",
       "title": "Tests — happy path E2E + one negative test",
-      "status": "pending",
+      "status": "completed",
       "planFile": "steps/step-6-tests.mdx"
     },
     {
       "id": "step-7",
       "title": "DECISIONS.md, README, submission polish",
-      "status": "pending",
+      "status": "completed",
       "planFile": "steps/step-7-docs.mdx"
     }
   ]
