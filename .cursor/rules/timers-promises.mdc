@@ -1,0 +1,66 @@
+---
+description: Use node:timers/promises for delays instead of custom sleep helpers
+globs: **/*.ts
+alwaysApply: false
+---
+
+# Use timers/promises for Delays
+
+Do not wrap `setTimeout` in a manual `Promise` or add local `sleep` helpers. Use the Node.js timers promise API instead.
+
+## Rules
+
+- Import `setTimeout` from `node:timers/promises`.
+- `await setTimeout(ms)` directly — no wrapper function.
+- For cancellation, pass `{ signal }` in the options argument.
+
+## Example
+
+```typescript
+// ❌ BAD — hand-rolled sleep helper
+function sleep(ms: number) {
+  return new Promise<void>((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+await sleep(500);
+
+// ✅ GOOD — timers/promises
+import { setTimeout } from 'node:timers/promises';
+
+await setTimeout(500);
+```
+
+With an `AbortSignal`:
+
+```typescript
+// ❌ BAD — manual timer + abort listener
+function sleep(ms: number, signal: AbortSignal) {
+  return new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(resolve, ms);
+
+    signal.addEventListener(
+      'abort',
+      () => {
+        clearTimeout(timer);
+        reject(new Error('aborted'));
+      },
+      { once: true },
+    );
+  });
+}
+
+// ✅ GOOD
+import { setTimeout } from 'node:timers/promises';
+
+await setTimeout(500, undefined, { signal });
+```
+
+If the name collides with the global `setTimeout`, import with an alias:
+
+```typescript
+import { setTimeout as delay } from 'node:timers/promises';
+
+await delay(500);
+```

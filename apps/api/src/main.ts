@@ -1,6 +1,6 @@
 import { env } from '@zama-indexer/env';
 import Fastify from 'fastify';
-import { registerRoutes } from './routes.js';
+import { registerRoutes } from './routes';
 
 const app = Fastify({ logger: true });
 

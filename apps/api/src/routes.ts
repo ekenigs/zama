@@ -5,7 +5,7 @@ import {
   getTransfersForAddress,
   normalizeAddress,
 } from '@zama-indexer/db';
-import { env } from '@zama-indexer/env';
+import { env, TOKEN_DECIMALS } from '@zama-indexer/env';
 import type { FastifyInstance } from 'fastify';
 
 function resolveContractAddress(override?: string): string {
@@ -65,7 +65,7 @@ function registerBalanceRoute(app: FastifyInstance) {
         contract,
         balance: row.balanceCleartext,
         status: row.balanceStatus,
-        decimals: env.TOKEN_DECIMALS,
+        decimals: TOKEN_DECIMALS,
         blockNumber: row.blockNumber === null ? null : Number(row.blockNumber),
       };
     },

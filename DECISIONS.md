@@ -106,6 +106,42 @@ The master plan recommends the following; each will be confirmed or revised as w
 
 **Consequences:** Full fhEVM ACL/delegation flow not fully exercised in CI without `forge-fhevm` + deployed contract — see reflection below.
 
+### 2026-06-24 — No CI for this project (local E2E scripts plan review)
+
+**Decision:** Do not add GitHub Actions or any automated CI pipeline for this project.
+
+**Context:** Chain E2E requires Foundry, Anvil, `vendor/forge-fhevm`, Docker Postgres, and a multi-process stack (indexer, worker, API). Setting up and maintaining CI for that path is significant work relative to the submission scope.
+
+**Choice:** Skip CI entirely to save time. Verify the full chain loop manually via README and the six-step script flow (`pnpm fund`, `pnpm send`, `pnpm grant`). Keep existing DB-level `tests/e2e/api.test.ts` runnable locally with `pnpm test` only.
+
+**Alternatives considered:** GitHub Actions job with Foundry + fhEVM (heavy setup, vendor clone, flaky chain fixtures); optional `tests/e2e/chain-flow.test.ts` skipped in CI (still adds maintenance without a CI runner).
+
+**Consequences:** No automated regression on push/PR. Chain decrypt + ACL delegation must be validated by the developer on their machine. Acceptable trade-off for a local-dev-focused take-home.
+
+### 2026-06-24 — Chain E2E scripts and delegation-first decrypt (local E2E plan)
+
+**Decision:** Add `pnpm fund`, `pnpm send`, and `pnpm grant` CLI scripts; worker decrypts third-party transfers via `delegatedDecryptValues` with the sender as delegator.
+
+**Context:** Need to exercise the full loop locally — fund accounts, Alice→Bob transfer, indexer ingest, failed decrypt before grant, backfill after grant — without the indexer being a transfer party.
+
+**Choice:** Scripts in `scripts/` use `@zama-indexer/decrypt` SDK helpers. `fund` mints `ERC20Mock` + `shield`s via `createWrappedToken`. `send` calls `confidentialTransfer` with decimal `--amount`. `grant` calls `sdk.delegations.delegateDecryption` from sender to indexer EOA. Worker uses direct `decryptValues` only for wrap/burn; all `kind: transfer` rows use delegated decrypt with `row.fromAddress` as delegator.
+
+**Alternatives considered:** Indexer as transfer recipient (rejected — hides ACL path); receiver-only grant (out of scope).
+
+**Consequences:** Manual six-step README flow is the chain E2E test. `dev.sh` auto-fetches forge-fhevm and persists `UNDERLYING_ADDRESS`.
+
+### 2026-06-24 — Local dev address sync (pragmatic, incomplete)
+
+**Decision:** Keep deploy-related addresses in sync where practical; accept known gaps in local dev ergonomics rather than polish the full bootstrap path.
+
+**Context:** A fresh `pnpm dev` redeploys `ERC20Mock` + `ConfidentialUSDC` on Anvil, producing new `UNDERLYING_ADDRESS` and `CONTRACT_ADDRESS` values. The indexer (Envio) watches `CONTRACT_ADDRESS` via `apps/indexer/config.yaml`; fund scripts read `UNDERLYING_ADDRESS` from `.env`. Drift between these files breaks ingest and funding.
+
+**Choice:** `scripts/dev.sh` updates `.env` on every successful deploy and patches `apps/indexer/config.yaml` with the new confidential wrapper address (`update_indexer_config_address`), then runs `pnpm codegen` in `apps/indexer`. I tried to keep all deploy addresses aligned this way.
+
+**Alternatives considered:** Single source of truth (e.g. only `.env`, generate `config.yaml` at startup); always wipe Anvil + Postgres + Envio on `pnpm dev`; wire `envio dev -r` automatically when the contract address changes.
+
+**Consequences:** The setup is **not perfect** and could be improved — e.g. Envio still needs a manual `envio dev -r` after redeploys, Anvil chain state can persist while contracts are re-deployed, and Envio realtime polling on Anvil can lag until the indexer is restarted. I deliberately did **not** spend more time hardening this path; priority went to the indexer ingest fix, delegation-first decrypt, CLI scripts (`fund` / `send` / `grant`), and validating the six-step manual E2E flow.
+
 ---
 
 ## Reflection (submission)
@@ -119,7 +155,7 @@ End-to-end decrypt against a live fhEVM host. The worker and SDK wiring are in p
 - **Sepolia / testnet** — local Anvil only.
 - **Event-driven decrypt queue** — v1 uses poll loop (documented above).
 - **REST authentication** — open `/v1/*` for local dev.
-- **Full chain E2E in CI** — DB-level E2E only; chain fixtures documented in README.
+- **Full chain E2E in CI** — skipped by decision (2026-06-24); manual chain flow in README instead.
 - **Hasura / Envio TUI** — disabled via `ENVIO_HASURA=false`.
 
 ### SDK feedback (`@zama-fhe/sdk@alpha`)

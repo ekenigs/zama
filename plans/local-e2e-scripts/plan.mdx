@@ -1,0 +1,346 @@
+<RichText id="overview">
+
+# Local chain E2E scripts — fund, send, grant, verify
+
+**Objective:** Add CLI scripts so a developer can run the full confidential-token loop on local Anvil + fhEVM: fund accounts with wrapped test tokens, submit `ConfidentialTransfer` transactions between arbitrary addresses, grant the indexer worker ACL delegation to decrypt third-party transfers, and verify outcomes via the existing read API and `decrypt_attempts` table.
+
+**Done means:** With `pnpm dev` running (Anvil, deployed contracts, Postgres, indexer, worker, API), the six-step manual flow below completes without hand-written `cast` calls; `pnpm send --from … --to … --amount 1` accepts human decimal amounts; `pnpm fund` mints + wraps; `pnpm grant` registers on-chain delegation from a transfer party to the indexer EOA; the worker decrypts previously pending rows after grant and decrypts new third-party transfers on the first poll; `pnpm lint && pnpm typecheck && pnpm test && pnpm fallow` stay green.
+
+**Non-goals:** Sepolia deployment, REST write endpoints, GitHub Actions / CI for this project, wallet UI, production KMS.
+
+</RichText>
+
+<RichText id="concrete-example">
+
+### The six-step test you want to run
+
+Assume Anvil account **#2** is Alice (`0x3C44…`), **#3** is Bob (`0x90F7…`), and the indexer worker uses account **#0** (`0xf39F…`, `INDEXER_PRIVATE_KEY` in `.env`).
+
+```bash
+pnpm dev:db && pnpm db:migrate && pnpm dev   # stack up
+
+pnpm fund --address 0x3C44… --amount 100     # mint underlying + wrap → confidential balance
+pnpm fund --address 0x90F7… --amount 10
+
+# 1 — third-party transfer (indexer is neither party)
+pnpm send --from 0x3C44… --to 0x90F7… --amount 1
+# → indexer ingests row: amount_status=pending_decryption, amount_handle set
+
+# 2 — worker fails (acl_denied logged in decrypt_attempts)
+curl localhost:3000/v1/indexer/status          # pendingDecryptions ≥ 1
+curl localhost:3000/v1/addresses/0x90F7…/transfers  # amount.status = pending_decryption
+
+# 3 — Alice delegates decrypt rights to indexer
+pnpm grant --from 0x3C44…
+
+# 4 — worker backfill (same poll loop, no restart)
+# → step-1 row becomes decrypted; decrypt_attempts shows success
+
+# 5 — repeat transfer
+pnpm send --from 0x3C44… --to 0x90F7… --amount 1
+
+# 6 — new row decrypts on first worker attempt (attempt_num = 1, outcome = success)
+```
+
+`--wait` on `send` optionally blocks until API shows `decrypted` or a timeout.
+
+</RichText>
+
+<Diagram
+  id="flow-diagram"
+  data={{
+    html: `<div class="diagram-panel" data-rough style="display:flex;flex-direction:column;gap:16px;padding:8px">
+  <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px">
+    <div class="diagram-card">
+      <div class="diagram-muted">Scripts (new)</div>
+      <div class="diagram-node">pnpm fund</div>
+      <div class="diagram-box">mint ERC20Mock</div>
+      <div class="diagram-box">approve + wrap</div>
+      <div class="diagram-node">pnpm send</div>
+      <div class="diagram-box">confidentialTransfer</div>
+      <div class="diagram-node">pnpm grant</div>
+      <div class="diagram-box">ACL.delegateForUserDecryption</div>
+    </div>
+    <div class="diagram-card">
+      <div class="diagram-muted">Existing pipeline</div>
+      <div class="diagram-node">ConfidentialTransfer event</div>
+      <div class="diagram-box">apps/indexer → transfers row</div>
+      <div class="diagram-box">amount_status=pending_decryption</div>
+      <div class="diagram-node">apps/worker poll</div>
+      <div class="diagram-box">packages/decrypt.tryDecryptTransfer</div>
+    </div>
+    <div class="diagram-card">
+      <div class="diagram-muted">Verify</div>
+      <div class="diagram-node">GET /v1/indexer/status</div>
+      <div class="diagram-box">pendingDecryptions</div>
+      <div class="diagram-node">GET …/transfers</div>
+      <div class="diagram-box">amount.status + value</div>
+      <div class="diagram-node">decrypt_attempts table</div>
+      <div class="diagram-box">outcome + attempt_num</div>
+    </div>
+  </div>
+  <div class="diagram-muted" style="text-align:center">Grant bridges the gap between third-party transfers and indexer decrypt — worker re-polls pending rows automatically.</div>
+</div>`,
+    css: `.diagram-card { border: 1px solid var(--wf-line); border-radius: 8px; padding: 12px; background: var(--wf-card); display: flex; flex-direction: column; gap: 8px; } .diagram-node { font-weight: 600; } .diagram-box { padding: 6px 8px; border-radius: 4px; background: var(--wf-paper); border: 1px dashed var(--wf-line); font-size: 0.9em; }`,
+    caption: "Scripts drive on-chain actions; existing indexer → worker → API path stays unchanged except delegated decrypt support.",
+  }}
+/>
+
+<Callout id="decision-addresses" tone="decision">
+
+**Test address map:** Scripts resolve Anvil dev keys for accounts #0–#9 by address (same keys as Foundry defaults). Indexer address is always derived from `INDEXER_PRIVATE_KEY` (Anvil #0) — never hard-coded and **never** a transfer party. All test transfers use **#2 → #3** (Alice → Bob); the indexer is always a third party.
+
+</Callout>
+
+<Callout id="decision-grant-model" tone="decision">
+
+**Grant model (sender only):** `pnpm grant --from <sender>` requires `--from` to be the **transfer sender** (Alice). It calls ACL `delegateForUserDecryption(delegate=indexer, contract=CONTRACT_ADDRESS, expiration)` signed by that sender. The worker always uses **delegated decrypt** for `kind: transfer`, with `delegatorAddress = row.fromAddress`. Receiver-only grant is out of scope. Contract-scoped delegation covers future transfers from that sender without re-granting.
+
+</Callout>
+
+<Callout id="decision-fhevm-fetch" tone="decision">
+
+**forge-fhevm auto-fetch (implemented in `dev.sh`):** First `pnpm dev` clones [forge-fhevm](https://github.com/zama-ai/forge-fhevm) into `vendor/forge-fhevm` (rev from `contracts/foundry.toml`), runs `forge soldeer install` in `contracts/`, then `./deploy-local.sh`. No manual `git clone`. Requires **git** and **network** on first run. `vendor/` is gitignored.
+
+</Callout>
+
+<Callout id="decision-funding" tone="decision">
+
+**Funding (manual only):** `pnpm dev` does **not** auto-fund test accounts. The six-step flow includes explicit `pnpm fund` steps before sending. `dev.sh` only persists `UNDERLYING_ADDRESS` from deploy — no mint/wrap on startup.
+
+</Callout>
+
+<Callout id="decision-no-ci" tone="decision">
+
+**No CI for this project:** Chain E2E is verified manually via the six-step script sequence and README. No GitHub Actions job, no `tests/e2e/chain-flow.test.ts`, no CI Foundry/fhEVM setup. Existing DB-level `tests/e2e/api.test.ts` stays for local `pnpm test`.
+
+</Callout>
+
+<RichText id="gaps">
+
+### What exists vs what we add
+
+The indexer, worker, API, and DB schema are implemented. Missing pieces are the on-chain interaction layer and delegated decrypt in the worker:
+
+</RichText>
+
+<Table
+  id="gap-table"
+  columns={["Area", "Today", "This plan"]}
+  rows={[
+    ["Deploy", "Manual forge-fhevm clone; only CONTRACT_ADDRESS in .env", "dev.sh auto-clones forge-fhevm + soldeer; persist UNDERLYING_ADDRESS"],
+    ["Funding", "None — deploy does not mint", "pnpm fund — mint + wrap via SDK"],
+    ["Transfer", "None", "pnpm send — confidentialTransfer, decimal --amount"],
+    ["ACL grant", "Documented only", "pnpm grant — on-chain delegation to indexer"],
+    ["Worker decrypt", "Party check blocks third-party decrypt", "Delegation-first: delegatedUserDecrypt with sender as delegator"],
+    ["Verify", "Manual curl", "--wait on send; manual six-step flow in README"],
+    ["E2E", "DB-seeded API test only", "Manual chain flow only — no CI chain fixtures"],
+  ]}
+/>
+
+<RichText id="env-changes">
+
+### Environment additions
+
+Extend `.env.example` (and `packages/env` if scripts need typed access):
+
+| Variable | Purpose |
+| --- | --- |
+| `UNDERLYING_ADDRESS` | ERC20Mock from deploy — required by `fund` |
+| `ACL_CONTRACT_ADDRESS` | fhEVM ACL — from SDK chain config or deploy log; used by `grant` |
+
+`scripts/dev.sh` already patches `CONTRACT_ADDRESS`; add the same for `UNDERLYING_ADDRESS` from forge deploy output.
+
+</RichText>
+
+<FileTree
+  id="file-tree"
+  title="Files to add or change"
+  entries={[
+    { path: "scripts/fund.ts", change: "added", note: "CLI: mint underlying + wrap to confidential balance" },
+    { path: "scripts/send.ts", change: "added", note: "CLI: confidentialTransfer with decimal amount" },
+    { path: "scripts/grant.ts", change: "added", note: "CLI: ACL delegateForUserDecryption to indexer" },
+    { path: "scripts/lib/cli.ts", change: "added", note: "parseArgs — -from, -to, -amount, --wait" },
+    { path: "scripts/lib/accounts.ts", change: "added", note: "Anvil #0–#9 address → private key map" },
+    { path: "scripts/lib/wait.ts", change: "added", note: "Poll API until transfer decrypted or timeout" },
+    { path: "scripts/lib/run.ts", change: "added", note: "Shared CLI main() error handler" },
+    { path: "scripts/lib/env.ts", change: "added", note: "requireContractAddress, requireUnderlyingAddress" },
+    { path: "packages/decrypt/src/try-decrypt.ts", change: "modified", note: "delegated decrypt fallback when grant exists" },
+    { path: "packages/decrypt/src/config.ts", change: "modified", note: "export getSdkForAccount(privateKey) for scripts" },
+    { path: "scripts/dev.sh", change: "modified", note: "auto-clone forge-fhevm, soldeer install, persist UNDERLYING_ADDRESS" },
+    { path: ".gitignore", change: "modified", note: "done: ignore vendor/" },
+    { path: ".env.example", change: "modified", note: "UNDERLYING_ADDRESS, ACL_CONTRACT_ADDRESS" },
+    { path: "package.json", change: "modified", note: "send, fund, grant scripts" },
+    { path: "README.md", change: "modified", note: "six-step E2E walkthrough" },
+    { path: "DECISIONS.md", change: "modified", note: "record grant + script decisions" },
+  ]}
+/>
+
+<RichText id="script-interfaces">
+
+### Script interfaces
+
+All scripts use `tsx`, load `.env`, and fail fast with actionable errors when `CONTRACT_ADDRESS` / `UNDERLYING_ADDRESS` / RPC are missing.
+
+</RichText>
+
+<Endpoint id="ep-fund" method="CLI" path="pnpm fund" summary="Mint underlying ERC-20 and wrap to confidential balance" params={[
+  { "name": "--address", "in": "body", "type": "address", "required": true, "description": "Recipient of confidential tokens" },
+  { "name": "--amount", "in": "body", "type": "number", "required": true, "description": "Human decimal amount (e.g. 100 = 100 USDC units)" },
+  { "name": "--private-key", "in": "body", "type": "hex", "description": "Minter signer; default Anvil #0" }
+]} responses={[
+  { "status": "0", "description": "Prints tx hashes for mint, approve, wrap; final confidential balance" }
+]}>
+
+Steps: (1) `ERC20Mock.mint` on `UNDERLYING_ADDRESS`, (2) `approve` wrapper, (3) `sdk.createToken(CONTRACT_ADDRESS).wrap(address, baseUnits)`. Reuses `@zama-fhe/sdk` + viem pattern from `packages/decrypt/src/config.ts` but with the minter wallet.
+
+</Endpoint>
+
+<Endpoint id="ep-send" method="CLI" path="pnpm send" summary="Confidential transfer between two addresses" params={[
+  { "name": "-from / --from", "in": "body", "type": "address", "required": true },
+  { "name": "-to / --to", "in": "body", "type": "address", "required": true },
+  { "name": "-amount / --amount", "in": "body", "type": "number", "required": true, "description": "Decimal, not wei — multiplied by 18 (fixed token decimals)" },
+  { "name": "--wait", "in": "body", "type": "flag", "description": "Poll GET /v1/addresses/:to/transfers until this txHash is decrypted" },
+  { "name": "--private-key", "in": "body", "type": "hex", "description": "Override sender key if -from not in Anvil map" }
+]} responses={[
+  { "status": "0", "description": "txHash; with --wait, prints decrypted cleartext from API" }
+]}>
+
+Steps: resolve sender SDK → `token.confidentialTransfer(to, baseUnits)` → print `txHash`. Amount conversion: `parseUnits(amount, 18)` via viem.
+
+</Endpoint>
+
+<Endpoint id="ep-grant" method="CLI" path="pnpm grant" summary="Delegate decrypt rights to indexer worker" params={[
+  { "name": "-from / --from", "in": "body", "type": "address", "required": true, "description": "Transfer sender only — must match row.fromAddress for decrypt to succeed" },
+  { "name": "--expiration-days", "in": "body", "type": "number", "description": "Default 365" },
+  { "name": "--private-key", "in": "body", "type": "hex", "description": "Delegator key override" }
+]} responses={[
+  { "status": "0", "description": "ACL tx hash; indexer can decrypt contract-scoped handles via delegation" }
+]}>
+
+Calls ACL `delegateForUserDecryption(indexerAddress, CONTRACT_ADDRESS, expirationTimestamp)` signed by delegator. Indexer address from `privateKeyToAccount(INDEXER_PRIVATE_KEY)`.
+
+</Endpoint>
+
+<RichText id="decrypt-worker-change">
+
+### Worker change — delegation-first decrypt
+
+The indexer is **never** a transfer party in the test model. Remove the party-only gate for transfers and use delegated decrypt with the sender as delegator. Wrap/burn keep direct `decryptValues` (zero-address parties). Before `pnpm grant`, transfers fail with `acl_denied`; after grant, the same poll loop backfills and decrypts new rows on the first attempt.
+
+</RichText>
+
+<TabsBlock
+  id="decrypt-tabs"
+  tabs={[
+    {
+      id: "tab-current",
+      label: "Current (party-only)",
+      blocks: [
+        {
+          id: "tab-current-code",
+          type: "annotated-code",
+          data: {
+            filename: "packages/decrypt/src/try-decrypt.ts",
+            language: "ts",
+            code: "function indexerCanDecrypt(row, indexerAddress) {\n  const isParty =\n    row.toAddress === indexerAddress ||\n    row.fromAddress === indexerAddress;\n  return isParty || row.fromAddress === ZERO || row.toAddress === ZERO;\n}\n\n// ...\nif (!indexerCanDecrypt(row, indexerAddress)) {\n  return { ok: false, reason: 'acl_denied' };\n}\nconst values = await sdk.decryption.decryptValues([{ encryptedValue: handle, contractAddress }]);",
+            annotations: [
+              { lines: "1-6", note: "Party check — fails for Alice→Bob when indexer is #0." },
+              { lines: "9-11", note: "Early exit; decrypt_attempts logs acl_denied every poll." },
+            ],
+          },
+        },
+      ],
+    },
+    {
+      id: "tab-target",
+      label: "Target (delegation-first)",
+      blocks: [
+        {
+          id: "tab-target-code",
+          type: "annotated-code",
+          data: {
+            filename: "packages/decrypt/src/try-decrypt.ts",
+            language: "ts",
+            code: "// wrap / burn — direct decryptValues (zero-address party)\nif (row.fromAddress === ZERO || row.toAddress === ZERO) {\n  return decryptValuesPath(sdk, handle, contractAddress);\n}\n\n// transfer A → B — always delegated; sender is delegator\nif (row.kind === 'transfer') {\n  return tryDelegatedDecrypt(sdk, {\n    handle,\n    contractAddress,\n    delegatorAddress: row.fromAddress,\n    delegateAddress: indexerAddress,\n  });\n}\n\nreturn { ok: false, reason: 'acl_denied' };",
+            annotations: [
+              { lines: "1-4", note: "Wrap/burn unchanged — indexer never involved as party." },
+              { lines: "6-13", note: "All user transfers: delegatedUserDecrypt; delegator = sender who ran grant." },
+              { lines: "15", note: "acl_denied before grant — satisfies step 2 of six-step flow." },
+            ],
+          },
+        },
+      ],
+    },
+  ]}
+/>
+
+<Callout id="risk-sdk" tone="warning">
+
+**SDK API confirmation during implementation:** Pin to `@zama-fhe/sdk@3.1.1-alpha.3` already in `packages/decrypt`. Read generated `.d.ts` for exact `delegatedUserDecrypt` / `createDelegatedUserDecryptEIP712` names — alpha naming may differ from relayer-sdk docs. If delegated API is absent, fall back to viem `writeContract` on ACL only and use `decryptValues` after on-chain `FHE.allow` patterns exposed by the wrapper (unlikely for third-party transfers).
+
+</Callout>
+
+<RichText id="implementation-phases">
+
+### Implementation phases
+
+</RichText>
+
+<Checklist
+  id="phases"
+  items={[
+    { id: "phase-0", label: "Phase 0 — Deploy + env", note: "done", checked: true },
+    { id: "phase-1", label: "Phase 1 — scripts/lib", note: "done", checked: true },
+    { id: "phase-2", label: "Phase 2 — fund.ts", note: "done", checked: true },
+    { id: "phase-3", label: "Phase 3 — send.ts", note: "done", checked: true },
+    { id: "phase-4", label: "Phase 4 — grant.ts", note: "done", checked: true },
+    { id: "phase-5", label: "Phase 5 — decrypt delegation", note: "done", checked: true },
+    { id: "phase-6", label: "Phase 6 — docs + DECISIONS", note: "done", checked: true },
+  ]}
+/>
+
+<RichText id="verification-detail">
+
+### Verification
+
+**Manual (primary):** Run the six-step script sequence above. Assert:
+
+- After step 1: `SELECT outcome FROM decrypt_attempts WHERE transfer_id = …` shows `acl_denied` with `attempt_num >= 1`.
+- After step 4: same `transfer_id` has `outcome = success`; API `amount.value` matches `1 * 10^6`.
+- After step 6: newest transfer has exactly one `decrypt_attempts` row with `outcome = success` and `attempt_num = 1`.
+
+**Automated:** Keep existing `tests/e2e/api.test.ts` (DB-seeded API contract only). No chain E2E test file — this project will not add CI.
+
+**Quality gate:**
+
+```bash
+pnpm lint && pnpm typecheck && pnpm test && pnpm fallow
+```
+
+</RichText>
+
+<RichText id="risks">
+
+### Risks
+
+- **forge-fhevm fetch fails:** If git clone or `deploy-local.sh` fails (no network, no git), `dev.sh` skips fhEVM deploy and wrap/send/decrypt will not work. Re-run `pnpm dev` after fixing connectivity; or remove `vendor/forge-fhevm` to force re-clone.
+- **Indexer lag:** Allow 1–2 worker poll intervals (~4 s) between send and API assertions; `--wait` should use `WORKER_POLL_INTERVAL_MS * 3` default timeout.
+- **Grant sender-only:** `pnpm grant --from` must be the transfer sender; worker never tries receiver as delegator.
+- **Decimal vs wei:** Strictly parse `--amount` as decimal; never accept raw base units in `send`/`fund` to match your CLI spec.
+
+</RichText>
+
+<RichText id="resolved-decisions">
+
+### Resolved decisions
+
+| Topic | Choice |
+| --- | --- |
+| Grant delegator | **Sender only** — `--from` must be the transfer sender; worker uses `row.fromAddress` as delegator |
+| Test account funding | **Manual `pnpm fund` only** — no auto-fund in `pnpm dev` |
+| Chain E2E / CI | **No CI** — manual six-step flow in README; no GitHub Actions or chain test file |
+| Indexer as transfer party | **Never** — all test transfers are third-party (#2 → #3); decrypt via delegation only |
+| forge-fhevm setup | **Auto-fetch in `dev.sh`** — clone to `vendor/forge-fhevm` + `forge soldeer install`; no manual clone |
+
+</RichText>

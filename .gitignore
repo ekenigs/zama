@@ -1,5 +1,13 @@
 node_modules/
 dist/
+vendor/
+
+# Foundry / Soldeer (contracts/)
+contracts/cache/
+contracts/out/
+contracts/broadcast/
+contracts/dependencies/
+
 .env
 *.log
 output/

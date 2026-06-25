@@ -5,9 +5,9 @@
     "lib": ["ES2024"],
     "types": ["node"],
 
-    // Modules
-    "module": "nodenext",
-    "moduleResolution": "nodenext",
+    // Modules — tsx runtime; extensionless relative imports
+    "module": "ESNext",
+    "moduleResolution": "bundler",
     "resolveJsonModule": true,
     "isolatedModules": true,
     "verbatimModuleSyntax": true,

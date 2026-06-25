@@ -1,6 +1,9 @@
 # yaml-language-server: $schema=./node_modules/envio/evm.schema.json
 name: confidential-token-indexer
 description: ERC-7984 confidential token indexer (ingest only)
+field_selection:
+  transaction_fields:
+    - hash
 contracts:
   - name: ConfidentialToken
     abi_file_path: ./abis/ConfidentialToken.json
@@ -20,4 +23,4 @@ chains:
     contracts:
       - name: ConfidentialToken
         address:
-          - "0x0000000000000000000000000000000000000000"
+          - "0x98eDDadCfde04dC22a0e62119617e74a6Bc77313"

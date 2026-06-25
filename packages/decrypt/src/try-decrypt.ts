@@ -1,9 +1,8 @@
-import type { EncryptedValue } from '@zama-fhe/sdk';
+import type { EncryptedValue, ZamaSDK } from '@zama-fhe/sdk';
 import type { TransferRow } from '@zama-indexer/db';
 import { upsertBalance } from '@zama-indexer/db';
 import type { Address } from 'viem';
-import { privateKeyToAccount } from 'viem/accounts';
-import { getContractAddress, getIndexerPrivateKey, getSdk } from './config.js';
+import { contractAddress, sdk } from './config';
 
 const ZERO = '0x0000000000000000000000000000000000000000';
 
@@ -23,14 +22,6 @@ function existingCleartext(row: TransferRow): string | null {
   return null;
 }
 
-function indexerCanDecrypt(row: TransferRow, indexerAddress: string): boolean {
-  const isParty =
-    row.toAddress.toLowerCase() === indexerAddress.toLowerCase() ||
-    row.fromAddress.toLowerCase() === indexerAddress.toLowerCase();
-
-  return isParty || row.fromAddress === ZERO || row.toAddress === ZERO;
-}
-
 function mapDecryptError(error: unknown, timedOut: boolean): DecryptOutcome {
   if (timedOut) {
     return { ok: false, reason: 'timeout' };
@@ -40,12 +31,77 @@ function mapDecryptError(error: unknown, timedOut: boolean): DecryptOutcome {
 
   if (
     message.toLowerCase().includes('acl') ||
-    message.toLowerCase().includes('allow')
+    message.toLowerCase().includes('allow') ||
+    message.toLowerCase().includes('delegation')
   ) {
     return { ok: false, reason: 'acl_denied' };
   }
 
   return { ok: false, reason: 'sdk_error' };
+}
+
+function isZeroAddress(value: string): boolean {
+  return value.toLowerCase() === ZERO;
+}
+
+async function decryptValuesPath(
+  client: ZamaSDK,
+  handle: EncryptedValue,
+  tokenAddress: Address,
+): Promise<DecryptOutcome> {
+  const values = await client.decryption.decryptValues([
+    {
+      encryptedValue: handle,
+      contractAddress: tokenAddress,
+    },
+  ]);
+  const cleartext = values[handle];
+
+  if (cleartext === null || cleartext === undefined) {
+    return { ok: false, reason: 'acl_denied' };
+  }
+
+  return { ok: true, cleartext: String(cleartext) };
+}
+
+async function tryDelegatedDecrypt(
+  client: ZamaSDK,
+  handle: EncryptedValue,
+  tokenAddress: Address,
+  delegatorAddress: Address,
+): Promise<DecryptOutcome> {
+  const values = await client.decryption.delegatedDecryptValues(
+    [
+      {
+        encryptedValue: handle,
+        contractAddress: tokenAddress,
+      },
+    ],
+    delegatorAddress,
+  );
+  const cleartext = values[handle];
+
+  if (cleartext === null || cleartext === undefined) {
+    return { ok: false, reason: 'acl_denied' };
+  }
+
+  return { ok: true, cleartext: String(cleartext) };
+}
+
+async function runWithTimeout(
+  operation: () => Promise<DecryptOutcome>,
+  timeoutMs: number,
+): Promise<DecryptOutcome> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    return await operation();
+  } catch (error) {
+    return mapDecryptError(error, controller.signal.aborted);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 export async function tryDecryptTransfer(
@@ -58,49 +114,46 @@ export async function tryDecryptTransfer(
     return { ok: true, cleartext: cached };
   }
 
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-
   try {
-    const sdk = await getSdk();
-    const indexerAddress = privateKeyToAccount(getIndexerPrivateKey()).address;
-
-    if (!indexerCanDecrypt(row, indexerAddress)) {
-      return { ok: false, reason: 'acl_denied' };
-    }
-
     const handle = row.amountHandle as EncryptedValue;
-    const values = await sdk.decryption.decryptValues([
-      {
-        encryptedValue: handle,
-        contractAddress: getContractAddress(),
-      },
-    ]);
-    const cleartext = values[handle];
 
-    if (cleartext === null || cleartext === undefined) {
-      return { ok: false, reason: 'acl_denied' };
+    if (isZeroAddress(row.fromAddress) || isZeroAddress(row.toAddress)) {
+      return runWithTimeout(
+        () => decryptValuesPath(sdk, handle, contractAddress),
+        timeoutMs,
+      );
     }
 
-    return { ok: true, cleartext: String(cleartext) };
+    if (row.kind === 'transfer') {
+      return runWithTimeout(
+        () =>
+          tryDelegatedDecrypt(
+            sdk,
+            handle,
+            contractAddress,
+            row.fromAddress as Address,
+          ),
+        timeoutMs,
+      );
+    }
+
+    return { ok: false, reason: 'acl_denied' };
   } catch (error) {
-    return mapDecryptError(error, controller.signal.aborted);
-  } finally {
-    clearTimeout(timer);
+    return mapDecryptError(error, false);
   }
 }
 
 async function refreshAddressBalance(
   address: string,
   blockNumber: bigint,
-  token: ReturnType<Awaited<ReturnType<typeof getSdk>>['createToken']>,
+  token: ReturnType<typeof sdk.createToken>,
 ) {
   try {
     const balance = await token.balanceOf(address as Address);
 
     await upsertBalance({
       address,
-      contractAddress: getContractAddress(),
+      contractAddress,
       balanceCleartext: String(balance),
       balanceStatus: 'ok',
       blockNumber,
@@ -108,7 +161,7 @@ async function refreshAddressBalance(
   } catch {
     await upsertBalance({
       address,
-      contractAddress: getContractAddress(),
+      contractAddress,
       balanceCleartext: null,
       balanceStatus: 'pending_decryption',
       blockNumber,
@@ -121,10 +174,9 @@ export async function refreshBalances(
   toAddress: string,
   blockNumber: bigint,
 ) {
-  const sdk = await getSdk();
-  const token = sdk.createToken(getContractAddress());
+  const token = sdk.createToken(contractAddress);
   const addresses = [fromAddress, toAddress].filter(
-    (address) => address.toLowerCase() !== ZERO,
+    (address) => !isZeroAddress(address),
   );
 
   for (const address of addresses) {

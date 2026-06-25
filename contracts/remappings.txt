@@ -1,5 +1,6 @@
 @fhevm/solidity/=dependencies/@fhevm-solidity-0.11.1/
 @openzeppelin/confidential-contracts/=dependencies/@openzeppelin-confidential-contracts-0.5.1/contracts/
-@openzeppelin/contracts/=dependencies/@openzeppelin-contracts-5.1.0/
+@openzeppelin/contracts/=dependencies/@openzeppelin-contracts-5.1.0/contracts/
 forge-fhevm/=dependencies/forge-fhevm-eba2324/src/
 forge-std/=dependencies/forge-std-1.9.6/src/
+encrypted-types/=dependencies/@encrypted-types-0.0.4/

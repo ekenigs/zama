@@ -1,11 +1,7 @@
-export {
-  getContractAddress,
-  getIndexerPrivateKey,
-  getSdk,
-  resetSdk,
-} from './config.js';
+export { contractAddress, indexerPrivateKey, sdk } from './config';
+export { createSdk } from './sdk';
 export {
   type DecryptOutcome,
   refreshBalances,
   tryDecryptTransfer,
-} from './try-decrypt.js';
+} from './try-decrypt';

@@ -1,4 +1,4 @@
-export { closeDb, createDb, db, getDatabaseUrl, getDb } from './client.js';
-export { migrate } from './migrate.js';
-export * from './queries.js';
-export * from './schema.js';
+export { closeDb, createDb, db, getDatabaseUrl, getDb } from './client';
+export { migrate } from './migrate';
+export * from './queries';
+export * from './schema';

@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { setTimeout } from 'node:timers/promises';
 import {
   countDecryptAttempts,
   fetchPendingTransfers,
@@ -13,21 +14,6 @@ import {
   tryDecryptTransfer,
 } from '@zama-indexer/decrypt';
 import { env } from '@zama-indexer/env';
-
-function sleep(ms: number, signal: AbortSignal) {
-  return new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(resolve, ms);
-
-    signal.addEventListener(
-      'abort',
-      () => {
-        clearTimeout(timer);
-        reject(new Error('aborted'));
-      },
-      { once: true },
-    );
-  });
-}
 
 async function logOutcome(row: TransferRow, outcome: DecryptOutcome) {
   const attemptNum = (await countDecryptAttempts(row.id)) + 1;
@@ -75,7 +61,7 @@ export async function runDecryptLoop(signal: AbortSignal) {
     await refreshPendingDecryptionCount();
 
     try {
-      await sleep(pollInterval, signal);
+      await setTimeout(pollInterval, undefined, { signal });
     } catch {
       break;
     }

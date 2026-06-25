@@ -11,6 +11,8 @@
       "!!**/dist",
       "!!**/node_modules",
       "!!**/output",
+      "!!**/contracts/dependencies",
+      "!!**/vendor",
       "!!.vscode",
       "!!**/packages/db/src/migrations/meta"
     ]

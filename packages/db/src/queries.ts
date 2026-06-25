@@ -1,13 +1,8 @@
 import { env } from '@zama-indexer/env';
 import { and, count, desc, eq, or, sql } from 'drizzle-orm';
-import { db } from './client.js';
-import type { InsertTransfer } from './schema.js';
-import {
-  balances,
-  decryptAttempts,
-  indexerState,
-  transfers,
-} from './schema.js';
+import { db } from './client';
+import type { InsertTransfer } from './schema';
+import { balances, decryptAttempts, indexerState, transfers } from './schema';
 
 const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
 

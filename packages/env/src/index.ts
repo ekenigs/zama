@@ -1,6 +1,7 @@
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { config } from 'dotenv';
+import { type Address, isAddress } from 'viem';
 import { z } from 'zod';
 
 config({
@@ -14,6 +15,14 @@ const privateKey = z
     'INDEXER_PRIVATE_KEY must be a 32-byte hex key',
   );
 
+const address = z.custom<Address>(
+  (value) => typeof value === 'string' && isAddress(value),
+  'must be a valid Ethereum address',
+);
+
+/** ERC-7984 wrapper + underlying ERC-20 both use 18 decimals in this project. */
+export const TOKEN_DECIMALS = 18;
+
 export const env = z
   .object({
     DATABASE_URL: z
@@ -22,11 +31,11 @@ export const env = z
       .default('postgresql://postgres:postgres@127.0.0.1:5432/zama'),
     RPC_URL: z.string().default('http://127.0.0.1:8545'),
     CHAIN_ID: z.coerce.number().int().positive().default(31337),
-    CONTRACT_ADDRESS: z.string().optional(),
+    CONTRACT_ADDRESS: address.optional(),
+    UNDERLYING_ADDRESS: address.optional(),
     INDEXER_PRIVATE_KEY: privateKey.optional(),
     API_HOST: z.string().default('0.0.0.0'),
     API_PORT: z.coerce.number().int().positive().default(3000),
-    TOKEN_DECIMALS: z.coerce.number().int().nonnegative().default(6),
     WORKER_POLL_INTERVAL_MS: z.coerce.number().int().positive().default(2000),
     WORKER_BATCH_SIZE: z.coerce.number().int().positive().default(50),
     DECRYPT_TIMEOUT_MS: z.coerce.number().int().positive().default(5000),

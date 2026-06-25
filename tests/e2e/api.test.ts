@@ -11,13 +11,12 @@ const thirdPartyB = '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
 
 process.env['DATABASE_URL'] = databaseUrl;
 process.env['CONTRACT_ADDRESS'] = contract;
-process.env['TOKEN_DECIMALS'] = '6';
 
 const { closeDb, insertTransfer, migrate, upsertIndexerState } = await import(
   '@zama-indexer/db'
 );
 const { default: Fastify } = await import('fastify');
-const { registerRoutes } = await import('../../apps/api/src/routes.js');
+const { registerRoutes } = await import('../../apps/api/src/routes');
 
 describe('indexer API e2e', () => {
   let app: ReturnType<typeof Fastify>;
@@ -46,7 +45,7 @@ describe('indexer API e2e', () => {
 
   it('happy path: decrypted transfer is returned with cleartext amount', async () => {
     await insertTransfer({
-      id: '0xhappy-1',
+      id: '0xhappy-18dec-1',
       txHash: '0xhappy',
       logIndex: 1,
       blockNumber: 99n,
@@ -54,7 +53,7 @@ describe('indexer API e2e', () => {
       toAddress: indexerRecipient,
       amountHandle: `0x${'11'.repeat(32)}`,
       amountStatus: 'decrypted',
-      amountCleartext: '250000',
+      amountCleartext: '1000000000000000000',
       kind: 'transfer',
       contractAddress: contract,
       chainId: 31337,
@@ -67,14 +66,15 @@ describe('indexer API e2e', () => {
 
     assert.equal(response.statusCode, 200);
     const body = response.json() as {
-      items: Array<{ amount: { status: string; value?: string } }>;
+      items: Array<{
+        id: string;
+        amount: { status: string; value?: string };
+      }>;
     };
 
-    const decrypted = body.items.find(
-      (item) => item.amount.status === 'decrypted',
-    );
+    const decrypted = body.items.find((item) => item.id === '0xhappy-18dec-1');
     assert.ok(decrypted);
-    assert.equal(decrypted.amount.value, '250000');
+    assert.equal(decrypted.amount.value, '1000000000000000000');
   });
 
   it('negative: third-party transfer stays pending_decryption and is not dropped', async () => {

@@ -1,4 +1,4 @@
-import { runDecryptLoop } from './loop.js';
+import { runDecryptLoop } from './loop';
 
 const controller = new AbortController();
 

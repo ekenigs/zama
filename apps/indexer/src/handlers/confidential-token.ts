@@ -6,7 +6,7 @@ import {
   upsertIndexerState,
 } from '@zama-indexer/db';
 import { indexer } from 'envio';
-import { resolveKind, toHandle } from './helpers.js';
+import { resolveKind, toHandle } from './helpers';
 
 const CHAIN_ID = 31337;
 

@@ -20,15 +20,24 @@
     "dev:api": "pnpm --filter @zama-indexer/api dev",
     "dev:worker": "pnpm --filter @zama-indexer/worker dev",
     "dev:indexer": "pnpm --filter @zama-indexer/indexer dev",
-    "dev:db": "docker compose up -d postgres"
+    "dev:db": "docker compose up -d postgres",
+    "fund": "tsx scripts/fund.ts",
+    "send": "tsx scripts/send.ts",
+    "grant": "tsx scripts/grant.ts"
+  },
+  "dependencies": {
+    "@zama-indexer/decrypt": "workspace:*",
+    "@zama-indexer/env": "workspace:*",
+    "commander": "15.0.0",
+    "viem": "2.47.0"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.0",
     "@types/node": "25.9.3",
     "@zama-indexer/db": "workspace:*",
     "@zama-indexer/env": "workspace:*",
-    "fastify": "5.8.2",
     "fallow": "2.99.0",
+    "fastify": "5.8.2",
     "lefthook": "2.1.9",
     "tsx": "4.22.4",
     "typescript": "6.0.3"

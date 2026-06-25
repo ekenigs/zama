@@ -430,7 +430,7 @@ All review questions resolved:
           data: {
             filename: "apps/api/src/routes/balance.ts",
             language: "ts",
-            code: "export async function getBalance(\n  request: FastifyRequest<{ Params: { address: string } }>,\n  reply: FastifyReply,\n) {\n  const address = normalizeAddress(request.params.address);\n  const row = await db.query.balances.findFirst({\n    where: and(\n      eq(balances.address, address),\n      eq(balances.contractAddress, env.CONTRACT_ADDRESS),\n    ),\n  });\n\n  if (!row) {\n    return reply.status(404).send({ error: \"address_not_found\" });\n  }\n\n  return {\n    address,\n    contract: env.CONTRACT_ADDRESS,\n    balance: row.balanceCleartext,\n    status: row.balanceStatus,\n    decimals: env.TOKEN_DECIMALS,\n    blockNumber: row.blockNumber,\n  };\n}",
+            code: "export async function getBalance(\n  request: FastifyRequest<{ Params: { address: string } }>,\n  reply: FastifyReply,\n) {\n  const address = normalizeAddress(request.params.address);\n  const row = await db.query.balances.findFirst({\n    where: and(\n      eq(balances.address, address),\n      eq(balances.contractAddress, env.CONTRACT_ADDRESS),\n    ),\n  });\n\n  if (!row) {\n    return reply.status(404).send({ error: \"address_not_found\" });\n  }\n\n  return {\n    address,\n    contract: env.CONTRACT_ADDRESS,\n    balance: row.balanceCleartext,\n    status: row.balanceStatus,\n    decimals: TOKEN_DECIMALS,\n    blockNumber: row.blockNumber,\n  };\n}",
             annotations: [
               { lines: "16-18", note: "404 only when address never appeared — not when pending decrypt." },
               { lines: "20-27", note: "Partners see ERC-20-shaped JSON; FHE is fully hidden." },

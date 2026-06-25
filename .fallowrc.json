@@ -6,12 +6,17 @@
     "apps/indexer/src/handlers/confidential-token.ts",
     "packages/db/src/index.ts",
     "packages/decrypt/src/index.ts",
-    "packages/env/src/index.ts"
+    "packages/env/src/index.ts",
+    "scripts/fund.ts",
+    "scripts/send.ts",
+    "scripts/grant.ts"
   ],
   "ignorePatterns": [
     "plans/**",
     "apps/indexer/schema.graphql",
-    "apps/indexer/.envio/**"
+    "apps/indexer/.envio/**",
+    "contracts/dependencies/**",
+    "vendor/**"
   ],
   "health": {
     "maxCrap": 60,
