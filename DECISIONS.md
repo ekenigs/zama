@@ -1,171 +1,67 @@
-# DECISIONS.md
+# Decisions
 
-Engineering decisions for the confidential ERC-7984 indexer. Each implementation step appends dated entries here — this file is the submission artifact, not a changelog of the planning chat.
+Important choices for this project.
 
-## How to use this file
+## Local chain instead of Sepolia
 
-- Record a decision when it is **made**, not when it is merely proposed.
-- Format: **Decision**, **Context**, **Choice**, **Alternatives considered**, **Consequences**.
-- Link to the plan step (`plans/confidential-indexer/steps/...`) when the decision was made during that step.
+Run everything on local Anvil + forge-fhevm (chain id 31337), not Sepolia.
 
----
+Local setup gives more flexibility and is easier to test end-to-end. A similar stack could run in CI if this were a real product. For a coding challenge, Sepolia might have been simpler.
 
-## Planned decisions (to be resolved during implementation)
+The cost is complexity. `scripts/dev.sh` orchestrates Foundry, Postgres, the indexer, worker, and API. It works but is heavy and sometimes flaky.
 
-The master plan recommends the following; each will be confirmed or revised as we implement.
+## No CI, limited tests
 
-| Topic | Proposed choice | Step |
-| --- | --- | --- |
-| Monorepo layout | `apps/` (api, indexer, worker) + `packages/` (db, decrypt) | step-0 |
-| Chain environment | Local **forge-fhevm** + Anvil (chain id 31337) for dev/test; Sepolia deferred | step-0 |
-| Indexing library | **Envio HyperIndex v3** — ingest only, no SDK in handlers | step-3 |
-| Partner database | **Postgres 18**, database `zama` on shared server + **Drizzle ORM** | step-2 |
-| Envio internal DB | Same **Postgres 18** server, database `envio` (via `ENVIO_PG_*`) | step-2 |
-| Decryption (v1) | **`apps/worker`** poll loop + `packages/decrypt` | step-4 |
-| Decryption (production) | **Event-driven** — trigger decrypt on ingest, not poll | future |
-| HTTP server | **Fastify** in `apps/api` (`/v1/...`) | step-5 |
-| SDK | `@zama-fhe/sdk@alpha` (prerelease docs) | step-4 |
-| Undecryptable events | Persist with `amountStatus: pending_decryption`; never drop | step-3 |
-| ACL backfill | Worker re-polls pending rows when delegation arrives | step-4 |
-| Test ERC-7984 token | **OpenZeppelin `openzeppelin-confidential-contracts`** (`ERC7984ERC20Wrapper`) | step-1 |
-| v1 scope | **Full scope** — all events, balances table, worker backfill, tests | plan review |
+No GitHub Actions or automated chain tests.
 
----
+Chain E2E needs Foundry, fhEVM, Docker, and several processes. Setting that up in CI is a lot of work for a take-home. The full flow is checked manually (`pnpm fund`, `pnpm send`, `pnpm grant`).
 
-## Decision log
+Test coverage is thin on purpose, to save time. The only automated test is `tests/e2e/api.test.ts`, which hits the API against seeded DB rows. There are no unit tests. There is no automated test for the chain flow (indexer ingest, decrypt, ACL grant, backfill).
 
-### 2026-06-23 — Decryption trigger: poll worker for v1, event-driven in production (plan review)
+## Index first, decrypt in the worker
 
-**Decision:** Run decryption in a separate Node.js `apps/worker` process using a simple database poll loop for v1. In production, move to event-driven decryption triggered at ingest time.
+The indexer only ingests chain events. Decryption runs in a separate worker.
 
-**Context:** Envio handlers must stay fast — network-bound Zama SDK KMS calls cannot block indexing. We need a clear separation between ingest (write `pending_decryption` rows) and decrypt (upgrade to cleartext). For a take-home submission, operational simplicity and crash-safe retry matter more than sub-second decrypt latency.
+Envio handlers write to the `zama` database. No Zama SDK in handlers. Indexing must stay fast and must not block on KMS calls.
 
-**Choice (v1):** `apps/worker` polls Postgres every ~2 s for rows with `amount_status = pending_decryption` (batch LIMIT 50), calls `packages/decrypt.tryDecrypt`, updates cleartext, refreshes balances. Same loop handles ACL backfill when delegation arrives later. Configurable via `WORKER_POLL_INTERVAL_MS` and `WORKER_BATCH_SIZE`.
+Undecryptable amounts are stored as `pending_decryption`, never dropped. `UnwrapFinalized` cleartext is stored as decrypted on ingest.
 
-**Choice (production target):** Event-driven decryption — enqueue a decrypt job when the indexer inserts a pending row (e.g. Postgres `LISTEN/NOTIFY`, a message queue, or an outbox table consumed by a worker). Decrypt runs immediately on ingest instead of waiting for the next poll. The worker process can remain, but it reacts to events rather than scanning on a timer.
+Transfers from `0x0` are classified as wrap (OpenZeppelin has no separate `Wrap` event).
 
-**Alternatives considered:** Inline decrypt in Envio Effect API (blocks throughput, replay risk); decrypt loop inside `apps/api` (couples read and write paths); manual CLI backfill only (no automatic ACL retry).
+`apps/worker` polls Postgres every ~2 s for `pending_decryption` rows and calls `packages/decrypt`. Same loop retries when ACL delegation arrives later.
 
-**Consequences:** Partners may see `pending_decryption` for up to one poll interval (~2 s) after ingest — surfaced via `/v1/indexer/status` `pendingDecryptions`. v1 code stays small and testable; production path is documented here so the submission does not over-engineer queuing prematurely.
+Production would trigger decrypt on ingest (queue, `LISTEN/NOTIFY`, or outbox) instead of polling.
 
-### 2026-06-23 — v1 scope (plan review)
+For normal transfers (Alice → Bob), the indexer is not a party to the transaction. The sender must run `pnpm grant` so the worker can decrypt the amount. Wrap and burn skip this because the indexer can decrypt those directly.
 
-**Decision:** Ship full scope as planned; no deferrals.
+## Monorepo layout
 
-**Context:** Plan offered optional cuts (unwrap events only, no balances table, manual backfill CLI) to reduce step 1–6 work.
+Split runnable services from shared libraries: `apps/` (api, indexer, worker) and `packages/` (db, decrypt). pnpm workspace, no Turborepo.
 
-**Choice:** Implement all four event types, `balances` via `balanceOf`, `apps/worker` ACL backfill, and full E2E test suite across steps 0–7.
+Three processes share db and decrypt code but run independently (different entry points, different toolchains). Envio owns the indexer lifecycle; the API and worker are plain Node apps. Giving each its own `package.json` makes that split obvious and lets pnpm start or typecheck one service at a time (`pnpm --filter @zama-indexer/api dev`).
 
-**Alternatives considered:** Defer unwrap events; compute balance from transfer sums only; ship manual backfill before worker loop.
+Skipped Turborepo. The repo is small (three apps, two shared packages) and this is a coding challenge. pnpm workspaces and `scripts/dev.sh` are enough. A task runner would add config and learning cost for little gain here.
 
-**Consequences:** Step 1 fixtures cover wrap + unwrap paths; step 3 indexes all OZ events; no scope shortcuts in submission.
+A `shared/` folder with direct imports would also work here and could mean less config (one tsconfig, path aliases, no workspace packages). I went with `apps/` + `packages/` because it matches a common multi-service repo shape and encodes dependencies in `package.json` (e.g. indexer imports `db` but not `decrypt`). For a challenge this size, that is mostly convention, not a hard technical need.
 
-### 2026-06-23 — Test token package (plan review)
+## Postgres in Docker (one container, two databases)
 
-**Decision:** Use OpenZeppelin `openzeppelin-confidential-contracts` for the local ERC-7984 test token.
+First idea was PGlite. It is simple but in-memory, and several processes need the same data (API, worker, indexer, Envio). PGlite was not a fit for that.
 
-**Context:** Need a wrapper contract on local fhEVM that emits spec-aligned events (`ConfidentialTransfer`, `Wrap`, `Unwrap*`) for indexer fixtures.
+Envio also requires Postgres for its sync tables. So the app needs real Postgres too, for transfers and balances in `zama` (Drizzle).
 
-**Choice:** Vendor `ERC7984ERC20Wrapper` from OpenZeppelin confidential contracts as a Foundry git dependency.
+The AI agent suggested two Postgres instances in Docker: one for our app, one for Envio. I picked a simpler setup: one Postgres 18 container, two databases (`zama` and `envio`, created in `docker/postgres/init.sql`). Less to run locally. Migrations apply only to `zama`.
 
-**Alternatives considered:** Zama `fhevm-foundry-template` (minimal, would need extension); contract from `zama-ai/sdk` examples (SDK-coupled, maturity unknown).
+## Test token: OpenZeppelin confidential contracts
 
-### 2026-06-23 — Monorepo layout and Postgres topology (step 0)
+Use OpenZeppelin `ERC7984ERC20Wrapper` from `openzeppelin-confidential-contracts` as the local test token.
 
-**Decision:** `apps/*` + `packages/*` workspace; one Postgres 18 container with databases `envio` and `zama`.
+The indexer needs a contract that emits the right ERC-7984 events (`ConfidentialTransfer`, unwrap events, etc.). The OZ wrapper already does that. Writing a custom wrapper or starting from Zama's minimal Foundry template would mean more Solidity work for little gain in a TypeScript-focused challenge.
 
-**Context:** Need clean pnpm boundaries between runnable services (api, indexer, worker) and shared libraries (db, decrypt).
+## Local dev addresses
 
-**Choice:** `pnpm-workspace.yaml` globs `apps/*` and `packages/*`. Docker `init.sql` creates both databases on first boot. Partner data lives in `zama`; Envio sync tables in `envio`.
+Hardcode `CONTRACT_ADDRESS` and `UNDERLYING_ADDRESS` in `.env` and `apps/indexer/config.yaml`. Deploy with Anvil account #8 so CREATE nonces land on those same addresses every time.
 
-**Alternatives considered:** Flat `src/api` + `indexer/` at root (awkward tsconfig); PGlite (rejected — need real Postgres for Envio + Drizzle parity).
+Main reason: keep testing simple. Scripts, README examples, and manual checks always use the same known addresses. No looking up what got deployed last run.
 
-**Consequences:** `DATABASE_URL` points at `zama`; `ENVIO_PG_*` points at `envio`. Migrations run only against `zama`.
-
-### 2026-06-23 — Envio ingest writes partner Postgres directly (step 3)
-
-**Decision:** Envio handlers call `@zama-indexer/db` query helpers; no Zama SDK in handlers.
-
-**Context:** Indexing must stay fast and replay-safe. Decryption is network-bound.
-
-**Choice:** `apps/indexer/src/handlers/confidential-token.ts` inserts `pending_decryption` rows (or `decrypted` for `UnwrapFinalized` cleartext). `from == 0x0` classified as `kind: wrap` (OZ has no `Wrap` event).
-
-**Alternatives considered:** Envio GraphQL entities only (would duplicate schema); inline decrypt in handlers (blocks throughput).
-
-**Consequences:** Handler file is a manual fallow entry point. Envio `schema.graphql` is minimal stub — partner tables are Drizzle-owned.
-
-### 2026-06-23 — Zama SDK decrypt path (step 4)
-
-**Decision:** `packages/decrypt` wraps `@zama-fhe/sdk@3.1.1-alpha.3` with viem clients and `cleartext()` relayer for local Anvil.
-
-**Context:** Alpha SDK API surface differs from stable docs; need server-side decrypt without browser.
-
-**Choice:** `sdk.decryption.decryptValues()` on transfer handles; `token.balanceOf()` for balance refresh. Worker polls pending rows.
-
-**Alternatives considered:** `decryptHandle` (not exposed on current alpha build); KMS HTTP calls directly (too low-level).
-
-**Consequences:** Full fhEVM ACL/delegation flow not fully exercised in CI without `forge-fhevm` + deployed contract — see reflection below.
-
-### 2026-06-24 — No CI for this project (local E2E scripts plan review)
-
-**Decision:** Do not add GitHub Actions or any automated CI pipeline for this project.
-
-**Context:** Chain E2E requires Foundry, Anvil, `vendor/forge-fhevm`, Docker Postgres, and a multi-process stack (indexer, worker, API). Setting up and maintaining CI for that path is significant work relative to the submission scope.
-
-**Choice:** Skip CI entirely to save time. Verify the full chain loop manually via README and the six-step script flow (`pnpm fund`, `pnpm send`, `pnpm grant`). Keep existing DB-level `tests/e2e/api.test.ts` runnable locally with `pnpm test` only.
-
-**Alternatives considered:** GitHub Actions job with Foundry + fhEVM (heavy setup, vendor clone, flaky chain fixtures); optional `tests/e2e/chain-flow.test.ts` skipped in CI (still adds maintenance without a CI runner).
-
-**Consequences:** No automated regression on push/PR. Chain decrypt + ACL delegation must be validated by the developer on their machine. Acceptable trade-off for a local-dev-focused take-home.
-
-### 2026-06-24 — Chain E2E scripts and delegation-first decrypt (local E2E plan)
-
-**Decision:** Add `pnpm fund`, `pnpm send`, and `pnpm grant` CLI scripts; worker decrypts third-party transfers via `delegatedDecryptValues` with the sender as delegator.
-
-**Context:** Need to exercise the full loop locally — fund accounts, Alice→Bob transfer, indexer ingest, failed decrypt before grant, backfill after grant — without the indexer being a transfer party.
-
-**Choice:** Scripts in `scripts/` use `@zama-indexer/decrypt` SDK helpers. `fund` mints `ERC20Mock` + `shield`s via `createWrappedToken`. `send` calls `confidentialTransfer` with decimal `--amount`. `grant` calls `sdk.delegations.delegateDecryption` from sender to indexer EOA. Worker uses direct `decryptValues` only for wrap/burn; all `kind: transfer` rows use delegated decrypt with `row.fromAddress` as delegator.
-
-**Alternatives considered:** Indexer as transfer recipient (rejected — hides ACL path); receiver-only grant (out of scope).
-
-**Consequences:** Manual six-step README flow is the chain E2E test. `dev.sh` auto-fetches forge-fhevm and persists `UNDERLYING_ADDRESS`.
-
-### 2026-06-24 — Local dev address sync (pragmatic, incomplete)
-
-**Decision:** Keep deploy-related addresses in sync where practical; accept known gaps in local dev ergonomics rather than polish the full bootstrap path.
-
-**Context:** A fresh `pnpm dev` redeploys `ERC20Mock` + `ConfidentialUSDC` on Anvil, producing new `UNDERLYING_ADDRESS` and `CONTRACT_ADDRESS` values. The indexer (Envio) watches `CONTRACT_ADDRESS` via `apps/indexer/config.yaml`; fund scripts read `UNDERLYING_ADDRESS` from `.env`. Drift between these files breaks ingest and funding.
-
-**Choice:** `scripts/dev.sh` updates `.env` on every successful deploy and patches `apps/indexer/config.yaml` with the new confidential wrapper address (`update_indexer_config_address`), then runs `pnpm codegen` in `apps/indexer`. I tried to keep all deploy addresses aligned this way.
-
-**Alternatives considered:** Single source of truth (e.g. only `.env`, generate `config.yaml` at startup); always wipe Anvil + Postgres + Envio on `pnpm dev`; wire `envio dev -r` automatically when the contract address changes.
-
-**Consequences:** The setup is **not perfect** and could be improved — e.g. Envio still needs a manual `envio dev -r` after redeploys, Anvil chain state can persist while contracts are re-deployed, and Envio realtime polling on Anvil can lag until the indexer is restarted. I deliberately did **not** spend more time hardening this path; priority went to the indexer ingest fix, delegation-first decrypt, CLI scripts (`fund` / `send` / `grant`), and validating the six-step manual E2E flow.
-
----
-
-## Reflection (submission)
-
-### Least confident piece
-
-End-to-end decrypt against a live fhEVM host. The worker and SDK wiring are in place, but verifying `decryptValues` + ACL delegation requires Foundry, `vendor/forge-fhevm`, and a deployed OZ wrapper on Anvil — not runnable in this environment without Docker + Foundry installed. The E2E tests validate API/DB contract with seeded rows instead of a full chain loop.
-
-### What was cut or deferred
-
-- **Sepolia / testnet** — local Anvil only.
-- **Event-driven decrypt queue** — v1 uses poll loop (documented above).
-- **REST authentication** — open `/v1/*` for local dev.
-- **Full chain E2E in CI** — skipped by decision (2026-06-24); manual chain flow in README instead.
-- **Hasura / Envio TUI** — disabled via `ENVIO_HASURA=false`.
-
-### SDK feedback (`@zama-fhe/sdk@alpha`)
-
-- **Positive:** Viem `createConfig` with `cleartext()` relayer is straightforward for local Anvil.
-- **Friction:** Prerelease blocked by pnpm `minimumReleaseAge` — needed an exclude entry.
-- **Friction:** API naming drift (`decryptValues` vs docs mentioning `userDecrypt` / `decryptHandle`) — had to read generated `.d.ts` files.
-- **Missing:** A minimal "indexer EOA decrypt transfer amount" recipe in repo examples without browser wallet flow.
-
-### AI assistance
-
-Planning and scaffolding were pair-programmed with Cursor (visual plan → approved MDX → incremental implementation). AI generated initial monorepo layout, Drizzle schema, Envio handlers, worker loop, and API routes. Human decisions (Postgres over PGlite, `apps/worker` poll model, OZ token choice) were captured in `DECISIONS.md` during review. AI fixed TypeScript strict env access, fallow entry points, and handler deduplication in a follow-up pass.
-
+That also avoids rewriting config on every `pnpm dev`. Envio watches a fixed contract address in `config.yaml`. Fund scripts read a fixed underlying token from `.env`. If addresses changed on each deploy, those files would drift and the indexer would need restarts more often. Trade-off: after a wipe/redeploy, restart Envio if ingest lags.
