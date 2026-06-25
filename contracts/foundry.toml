@@ -15,6 +15,4 @@ local = "http://127.0.0.1:8545"
 "@fhevm-solidity" = "0.11.1"
 forge-fhevm = { version = "eba2324", git = "https://github.com/zama-ai/forge-fhevm.git", rev = "eba2324" }
 
-[dependencies.forge-std]
-version = "1.9.6"
-url = "https://github.com/foundry-rs/forge-std.git"
+forge-std = "1.9.6"

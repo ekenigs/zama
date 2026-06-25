@@ -7,7 +7,7 @@ Local fhEVM indexer + decrypt worker + partner read API for ERC-7984 confidentia
 - Node.js ≥ 24, pnpm 11
 - Docker (Postgres 18) — OrbStack, Docker Desktop, or equivalent
 - [Foundry](https://book.getfoundry.sh/getting-started/installation) (`anvil`, `forge`, `git`)
-- Network access on first `pnpm dev` — auto-clones [forge-fhevm](https://github.com/zama-ai/forge-fhevm) to `vendor/forge-fhevm` and runs `forge soldeer install` in `contracts/`
+- Network access on first `pnpm dev` — auto-clones [forge-fhevm](https://github.com/zama-ai/forge-fhevm) to `vendor/forge-fhevm` and installs contract deps via `scripts/install-contract-deps.sh` (git + pinned zips, no soldeer)
 
 ## Quick start
 
@@ -109,20 +109,24 @@ pnpm install
 pnpm dev
 ```
 
+### Contract / forge-fhevm dependencies
+
+`pnpm dev` runs `scripts/install-contract-deps.sh` and `scripts/install-forge-fhevm-deps.sh` (git clones + pinned Soldeer S3 zips). No `forge soldeer` required.
+
+Manual reinstall:
+
+```bash
+pnpm contracts:deps
+bash scripts/install-forge-fhevm-deps.sh   # after vendor/forge-fhevm exists; inits git submodules + remappings
+```
+
 ### `forge soldeer install` fails (corrupt zip / `Could not find EOCD`)
 
-Soldeer can leave a broken `dependencies/*.zip` on a first run. `scripts/dev.sh` retries up to three times and falls back to `git clone` for contract deps. If it still fails:
+This project no longer uses `forge soldeer` for local dev. If you still run it manually, remove broken zips and use the scripts above instead:
 
 ```bash
 rm -rf contracts/dependencies contracts/cache
-rm -f contracts/dependencies/*.zip 2>/dev/null
-cd contracts && forge soldeer install
-```
-
-Install `vendor/forge-fhevm` deps first (they are copied on fallback):
-
-```bash
-cd vendor/forge-fhevm && forge soldeer install
+pnpm contracts:deps
 ```
 
 ### Token deploy fails (`CONTRACT_ADDRESS mismatch` / deployer nonce)

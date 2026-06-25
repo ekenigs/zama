@@ -6,8 +6,6 @@ cd "$ROOT"
 
 FORGE_FHEVM_DIR="$ROOT/vendor/forge-fhevm"
 FORGE_FHEVM_URL="https://github.com/zama-ai/forge-fhevm.git"
-CONTRACTS_DIR="$ROOT/contracts"
-CONTRACTS_DEPS="$CONTRACTS_DIR/dependencies"
 
 # Anvil account #8 — dedicated token deployer (nonces 0/1 → fixed CREATE addresses)
 DEFAULT_TOKEN_DEPLOYER_KEY="0xdbda1821b80551c9d65939329250298aa3472ba22feea921c0cf5d620ea67b97"
@@ -22,80 +20,6 @@ fi
 
 forge_fhevm_rev() {
   grep 'forge-fhevm' contracts/foundry.toml | sed -n 's/.*rev = "\([^"]*\)".*/\1/p'
-}
-
-clean_soldeer_partial() {
-  local dir="$1"
-
-  rm -f "$dir"/dependencies/*.zip 2>/dev/null || true
-  find "$dir"/dependencies -maxdepth 1 -type d -empty -delete 2>/dev/null || true
-}
-
-install_soldeer() {
-  local dir="$1"
-  local attempt
-
-  for attempt in 1 2 3; do
-    if (cd "$dir" && forge soldeer install); then
-      return 0
-    fi
-
-    echo "forge soldeer install failed in ${dir} (attempt ${attempt}/3)"
-
-    clean_soldeer_partial "$dir"
-    sleep 1
-  done
-
-  return 1
-}
-
-contract_deps_ready() {
-  [[ -f "$CONTRACTS_DEPS/forge-std-1.9.6/src/Script.sol" ]] &&
-    [[ -f "$CONTRACTS_DEPS/@fhevm-solidity-0.11.1/lib/FHE.sol" ]] &&
-    [[ -d "$CONTRACTS_DEPS/@openzeppelin-confidential-contracts-0.5.1/contracts" ]]
-}
-
-bootstrap_contract_deps_fallback() {
-  local fhevm_deps="$FORGE_FHEVM_DIR/dependencies"
-  local rev
-  rev="$(forge_fhevm_rev)"
-  rev="${rev:-eba2324}"
-
-  echo "Falling back to git clones for contract dependencies…"
-  mkdir -p "$CONTRACTS_DEPS"
-
-  if [[ ! -f "$CONTRACTS_DEPS/forge-std-1.9.6/src/Script.sol" ]]; then
-    git clone --depth 1 --branch v1.9.6 https://github.com/foundry-rs/forge-std.git \
-      "$CONTRACTS_DEPS/forge-std-1.9.6"
-  fi
-
-  if [[ ! -d "$CONTRACTS_DEPS/@openzeppelin-contracts-5.1.0/contracts" ]]; then
-    git clone --depth 1 --branch v5.1.0 https://github.com/OpenZeppelin/openzeppelin-contracts.git \
-      "$CONTRACTS_DEPS/@openzeppelin-contracts-5.1.0"
-  fi
-
-  if [[ ! -d "$CONTRACTS_DEPS/@openzeppelin-confidential-contracts-0.5.1/contracts" ]]; then
-    git clone --depth 1 --branch v0.5.1 https://github.com/OpenZeppelin/openzeppelin-confidential-contracts.git \
-      "$CONTRACTS_DEPS/@openzeppelin-confidential-contracts-0.5.1"
-  fi
-
-  if [[ ! -d "$CONTRACTS_DEPS/forge-fhevm-${rev}/src" ]]; then
-    git clone --depth 1 https://github.com/zama-ai/forge-fhevm.git \
-      "$CONTRACTS_DEPS/forge-fhevm-${rev}"
-    (cd "$CONTRACTS_DEPS/forge-fhevm-${rev}" && git checkout "$rev" 2>/dev/null || true)
-  fi
-
-  if [[ -d "$fhevm_deps/@fhevm-solidity-0.11.1" ]]; then
-    rm -rf "$CONTRACTS_DEPS/@fhevm-solidity-0.11.1"
-    cp -R "$fhevm_deps/@fhevm-solidity-0.11.1" "$CONTRACTS_DEPS/"
-  fi
-
-  if [[ -d "$fhevm_deps/@encrypted-types-0.0.4" ]]; then
-    rm -rf "$CONTRACTS_DEPS/@encrypted-types-0.0.4"
-    cp -R "$fhevm_deps/@encrypted-types-0.0.4" "$CONTRACTS_DEPS/"
-  fi
-
-  contract_deps_ready
 }
 
 ensure_forge_fhevm_host() {
@@ -141,13 +65,7 @@ ensure_forge_fhevm_deps() {
     return 1
   fi
 
-  if [[ -f "$FORGE_FHEVM_DIR/dependencies/forge-std-1.14.0/src/Script.sol" ]]; then
-    return 0
-  fi
-
-  echo "Installing forge-fhevm dependencies (forge soldeer)…"
-
-  install_soldeer "$FORGE_FHEVM_DIR"
+  bash "$ROOT/scripts/install-forge-fhevm-deps.sh"
 }
 
 ensure_contract_deps() {
@@ -155,25 +73,7 @@ ensure_contract_deps() {
     return 0
   fi
 
-  if contract_deps_ready; then
-    return 0
-  fi
-
-  echo "Installing contract dependencies (forge soldeer)…"
-
-  if install_soldeer "$CONTRACTS_DIR"; then
-    return 0
-  fi
-
-  echo "Warning: forge soldeer install failed — trying git fallback"
-
-  if bootstrap_contract_deps_fallback; then
-    return 0
-  fi
-
-  echo "Error: could not install contract dependencies"
-
-  return 1
+  bash "$ROOT/scripts/install-contract-deps.sh"
 }
 
 token_deployer_private_key() {

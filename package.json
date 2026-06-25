@@ -17,6 +17,7 @@
     "db:generate": "pnpm --filter @zama-indexer/db generate",
     "db:migrate": "pnpm --filter @zama-indexer/db migrate",
     "dev": "bash scripts/dev.sh",
+    "contracts:deps": "bash scripts/install-contract-deps.sh",
     "dev:api": "pnpm --filter @zama-indexer/api dev",
     "dev:worker": "pnpm --filter @zama-indexer/worker dev",
     "dev:indexer": "pnpm --filter @zama-indexer/indexer dev",
