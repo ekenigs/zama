@@ -41,8 +41,8 @@ Test addresses (Anvil default mnemonic):
 With `pnpm dev` running:
 
 ```bash
-pnpm fund --address 0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC --amount 10
-pnpm fund --address 0x90F79bf6EB2c4f870365E785982E1f101E93b906 --amount 10
+pnpm fund --address 0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC --amount 5
+pnpm fund --address 0x90F79bf6EB2c4f870365E785982E1f101E93b906 --amount 5
 
 # 1 — transfer (indexer is neither party)
 pnpm send --from 0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC --to 0x90F79bf6EB2c4f870365E785982E1f101E93b906 --amount 1
@@ -137,9 +137,13 @@ Contracts deploy to the addresses in `.env` via Anvil account **#8** (`TOKEN_DEP
 
 On local Anvil, Envio realtime sync can stall (`indexed_block` behind chain tip). Restart the indexer process started by `pnpm dev`, or run `envio dev` again in `apps/indexer`. After wiping Anvil and redeploying, restart Envio if ingest stops.
 
-### `pnpm fund` / `pnpm send` errors after redeploy
+### `pnpm fund` fails at `shield:approveAndWrap`
 
-Ensure `.env` still has the canonical `CONTRACT_ADDRESS` / `UNDERLYING_ADDRESS` from `.env.example`. Restart `pnpm dev` (or at least worker + API + indexer) after a clean redeploy. If `shield` fails once, retry `pnpm fund`.
+The mint step can succeed while `wrap` reverts. Common causes:
+
+- **`ERC7984TotalSupplyOverflow`** — cumulative shielded supply exceeds the `euint64` cap (~18.44 tokens at 18 decimals). Lower `--amount` values or run the clean-slate steps so both accounts fit under the cap. Do not fund `10` + `10` on a fresh chain.
+- **Address already funded** — re-running `pnpm fund` on the same account tries to wrap again; use smaller amounts or restart Anvil.
+- **Stale deploy** — ensure `.env` still has the canonical `CONTRACT_ADDRESS` / `UNDERLYING_ADDRESS` from `.env.example`. Restart `pnpm dev` (or at least worker + API + indexer) after a clean redeploy.
 
 ## Architecture
 
