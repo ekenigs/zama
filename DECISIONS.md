@@ -65,3 +65,63 @@ Hardcode `CONTRACT_ADDRESS` and `UNDERLYING_ADDRESS` in `.env` and `apps/indexer
 Main reason: keep testing simple. Scripts, README examples, and manual checks always use the same known addresses. No looking up what got deployed last run.
 
 That also avoids rewriting config on every `pnpm dev`. Envio watches a fixed contract address in `config.yaml`. Fund scripts read a fixed underlying token from `.env`. If addresses changed on each deploy, those files would drift and the indexer would need restarts more often. Trade-off: after a wipe/redeploy, restart Envio if ingest lags.
+
+# Reflection
+
+## Least confident under partner load
+
+The worker decrypt loop in `apps/worker/src/loop.ts`.
+
+It processes pending rows one at a time. After each decrypt it also refreshes both balances on chain. A burst of transfers would fill the queue faster than the worker clears it. Partners would see amounts stuck as `pending_decryption`.
+
+Rows that fail with `acl_denied` get retried every poll with no pause. That adds load without helping until someone runs `pnpm grant`.
+
+The read API is not my main worry. Those routes are simple DB reads. The worker is the bottleneck.
+
+**How to prove it:** Run many transfers in a row. Watch `pendingDecryptions` on `/v1/indexer/status` and how long rows stay pending in the DB.
+
+**Likely fix:** Move from a poll loop to a job queue. Decrypt with a small concurrency limit. Back off on `acl_denied`. Refresh balances less often instead of after every row.
+
+## What I cut, and four more hours
+
+**Cut or deferred:**
+
+- Sepolia / public testnet
+- CI and automated chain E2E (manual `fund` / `send` / `grant` flow instead)
+- Unit tests (only `tests/e2e/api.test.ts` against seeded DB rows)
+- Event-driven decrypt queue (poll loop only)
+- REST auth on `/v1/*`
+- Polishing `scripts/dev.sh` and Envio/Anvil restart ergonomics
+
+**With four more hours:**
+
+1. Add one automated chain test: `fund`, `send`, `grant`, then check the API shows a decrypted transfer. That covers the main loop end to end.
+2. If time left: improve the worker (parallel decrypt, backoff on `acl_denied`).
+
+## SDK feedback (`@zama-fhe/sdk`)
+
+Version: `3.1.1-alpha.3`. I checked the [v3 migration guide](https://docs.zama.org/protocol/sdk/alpha/migration/migrate-v2-to-v3) and alpha docs. Local setup (`createConfig`, `cleartext()`), `createToken` vs `createWrappedToken`, and `delegateDecryption` are already documented. We should have started there.
+
+Three things I would still ask for, in priority order:
+
+1. A Node guide for indexers that decrypt **transfer event handles**. Migration mentions building your own indexer with `decryptValues`, and the delegated decryption guide covers `decryptBalanceAs` for balances. We needed `decryptValues` for wrap/burn and `delegations.delegateDecryption` + `decryption.delegatedDecryptValues` when Alice sends to Bob. That full path is not written down anywhere I found.
+
+2. A server-side example for `sdk.decryption.decryptValues` and `sdk.decryption.delegatedDecryptValues`. The encrypt/decrypt guide is React-first (`useDecryptValues`). Our worker calls the decryption namespace directly. The APIs work, but we found them by reading types, not docs.
+
+3. Clearer docs on ACL denial via `null`. When delegation is missing, `decryptValues` and `delegatedDecryptValues` usually resolve with `null` for the handle instead of throwing `DecryptionFailedError` or another typed error. We map that to `acl_denied` in `try-decrypt.ts`.
+
+## AI assistance
+
+I used Cursor for planning, scaffolding, and incremental implementation.
+
+**Process:** First I set up guardrails: strict TypeScript, Biome, and fallow. Then I added Cursor rules and skills. Only after that did I start with visual plans, approve them as MDX, and build step by step (monorepo layout, Drizzle schema, Envio handlers, worker loop, API routes, local E2E scripts). Having those checks in place before implementation helped a lot. The AI still drafted most of the boilerplate, but lint, typecheck, test, and fallow caught bad output early. I chose stack decisions (Postgres over PGlite, poll worker, OpenZeppelin token).
+
+**Where the agent got it wrong:** There were quite a few issues, not all subtle.
+
+Architecture: an early suggestion was two Postgres Docker containers (one for our app, one for Envio). I kept one container with two databases instead.
+
+Code style: by default the agent wrote outdated or unnecessary code. It used `new Promise` + `setTimeout` for delays instead of `node:timers/promises`. I added a Cursor rule for that (see [timers-promises rule](ed0f0974-97b9-4407-82b5-5e68faf33e2f) and `.cursor/rules/timers-promises.mdc`).
+
+Unnecessary abstractions: it added `scripts/lib/sdk.ts` with a `Map` caching SDK instances by private key. For this project that was pointless; we call `createSdk` from `packages/decrypt` directly. It also wrote custom helpers (e.g. decimal-to-wei conversion) instead of using viem's `parseUnits`, which we use in `fund.ts` and `send.ts` now.
+
+Bootstrap: early plans rewrote contract addresses on every `pnpm dev`. I moved to fixed CREATE addresses so testing stays predictable.
